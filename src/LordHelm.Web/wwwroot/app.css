@@ -64,6 +64,33 @@ html, body {
 .grid-stack-item.approval > .grid-stack-item-content {
     border-color: var(--host); border-style: double; animation: pulse-soft 1.6s infinite;
 }
+.grid-stack-item.task > .grid-stack-item-content {
+    border-color: var(--sandbox-1); border-style: dotted;
+}
+
+.goal-bar {
+    padding: 10px 16px; border-bottom: 1px solid var(--panel-edge);
+    display: flex; flex-direction: column; gap: 6px;
+}
+.goal-bar form {
+    display: flex; gap: 8px; align-items: center;
+}
+.goal-bar input[type="text"] {
+    flex: 1; background: var(--panel); color: var(--fg);
+    border: 1px solid var(--panel-edge); border-radius: 2px;
+    padding: 6px 10px; font-family: inherit; font-size: 12px;
+}
+.goal-bar input[type="text"]:focus { outline: none; border-color: var(--host); }
+.goal-bar button {
+    background: transparent; color: var(--host); border: 1px solid var(--host);
+    padding: 6px 14px; font-family: inherit; font-size: 12px; cursor: pointer;
+    letter-spacing: 1px;
+}
+.goal-bar button[disabled] { opacity: 0.4; cursor: not-allowed; }
+.goal-bar button:hover:not([disabled]) { background: var(--host); color: var(--bg); }
+.goal-bar .goal-status {
+    font-size: 11px; color: var(--muted); font-style: italic;
+}
 
 .approval-actions { display: flex; gap: 8px; margin-top: 8px; }
 .approval-actions button {

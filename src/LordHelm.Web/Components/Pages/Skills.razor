@@ -1,0 +1,53 @@
+@page "/skills"
+@rendermode InteractiveServer
+@inject LordHelm.Skills.ISkillCache Cache
+
+<PageTitle>Lord Helm — Skills</PageTitle>
+
+<header class="helm-header">
+    <h1>Skills <span class="subtitle">@skills.Count loaded</span></h1>
+</header>
+
+<section class="mgmt-body">
+    @if (skills.Count == 0)
+    {
+        <div class="empty-panel">
+            No skills loaded yet. Check that the <code>skills/</code> directory exists at the repo root
+            and contains valid <code>.skill.xml</code> files.
+        </div>
+    }
+    else
+    {
+        <table class="mgmt-table">
+            <thead>
+                <tr>
+                    <th>Id</th><th>Version</th><th>Env</th><th>Risk</th><th>Timeout</th><th>MinTrust</th><th>Hash</th>
+                </tr>
+            </thead>
+            <tbody>
+            @foreach (var s in skills)
+            {
+                <tr>
+                    <td><strong>@s.Id</strong></td>
+                    <td>@s.Version</td>
+                    <td class="env-@s.ExecEnv.ToString().ToLowerInvariant()">@s.ExecEnv</td>
+                    <td>@s.RiskTier</td>
+                    <td>@s.Timeout</td>
+                    <td>@s.MinTrust</td>
+                    <td class="mono">@s.ContentHashSha256.Substring(0, 12)...</td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    }
+</section>
+
+@code {
+    private IReadOnlyList<LordHelm.Core.SkillManifest> skills = Array.Empty<LordHelm.Core.SkillManifest>();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Cache.InitializeAsync();
+        skills = await Cache.ListAsync();
+    }
+}

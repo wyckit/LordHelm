@@ -1,0 +1,60 @@
+@page "/widgets"
+
+<PageTitle>Lord Helm — Widgets</PageTitle>
+
+<header class="helm-header">
+    <h1>Widgets <span class="subtitle">supported types</span></h1>
+</header>
+
+<section class="mgmt-body">
+    <p class="muted">
+        Widgets materialise in the dashboard grid whenever Lord Helm spins up an Expert thread or needs
+        operator attention. Each type has a distinct pre-attentive visual encoding — color, border style,
+        and motion — so you can scan a busy grid in under 200&nbsp;ms without reading labels.
+    </p>
+
+    <table class="mgmt-table">
+        <thead>
+            <tr><th>Kind</th><th>Visual</th><th>Meaning</th><th>Source</th></tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><strong>Subprocess</strong> (Host)</td>
+                <td><span class="preview host-preview">[host]</span></td>
+                <td>CLI subprocess running natively on the host.</td>
+                <td>Watcher &#x2192; WidgetState.ApplyProcessEvent (label without "sandbox")</td>
+            </tr>
+            <tr>
+                <td><strong>Subprocess</strong> (Sandbox)</td>
+                <td><span class="preview sandbox-preview">[box]</span></td>
+                <td>Ephemeral Docker container running an untrusted skill. Dashed + soft pulse.</td>
+                <td>Watcher events with label containing "sandbox"</td>
+            </tr>
+            <tr>
+                <td><strong>Task</strong></td>
+                <td><span class="preview task-preview">[task]</span></td>
+                <td>Goal decomposition task — an expert assembled for a single sub-goal in the DAG.</td>
+                <td>GoalRunner &#x2192; IGoalProgressSink &#x2192; WidgetState.StartTaskWidget</td>
+            </tr>
+            <tr>
+                <td><strong>Approval</strong></td>
+                <td><span class="preview approval-preview">[?]</span></td>
+                <td>Host action waiting for operator approve/deny. Double amber border.</td>
+                <td>ApprovalQueueBridge reading ApprovalGate.PendingReader</td>
+            </tr>
+            <tr>
+                <td><strong>Incident</strong></td>
+                <td><span class="preview incident-preview">!</span></td>
+                <td>Sandbox failure awaiting Consensus Protocol. Pulsing red/yellow.</td>
+                <td>IncidentResponder &#x2192; (future) incident widget bridge</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h2>Widget lifecycle</h2>
+    <ul class="muted">
+        <li>Every widget lives on the gridstack.js grid — drag, resize, reorder.</li>
+        <li>Layout persists to <code>localStorage</code>. Use "reset layout" on the dashboard to clear.</li>
+        <li>Clicking <code>[ ]</code> on a widget opens a live log modal subscribed to <code>/logs/&lt;id&gt;</code> via SSE.</li>
+    </ul>
+</section>

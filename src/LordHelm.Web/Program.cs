@@ -114,6 +114,8 @@ builder.Services.AddSingleton<ILordHelmManager, LordHelmManager>();
 builder.Services.AddSingleton<IExpertProvisioner, DefaultExpertProvisioner>();
 builder.Services.AddSingleton<DataflowBus>();
 builder.Services.AddSingleton<IDataflowBus>(sp => sp.GetRequiredService<DataflowBus>());
+builder.Services.AddSingleton<IGoalProgressSink, WidgetGoalProgressSink>();
+builder.Services.AddSingleton<IGoalRunner, GoalRunner>();
 
 // ---------------------------------------------------------------- consensus
 builder.Services.AddSingleton<INoveltyCheck, TokenOverlapNoveltyCheck>();
@@ -146,6 +148,7 @@ app.UseAntiforgery();
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
 app.MapHelmLogStream();
+app.MapHelmGoalEndpoint();
 
 app.Run();
 

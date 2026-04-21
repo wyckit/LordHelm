@@ -1,0 +1,73 @@
+@page "/providers"
+@rendermode InteractiveServer
+@inject LordHelm.Providers.IProviderOrchestrator Orchestrator
+
+<PageTitle>Lord Helm — Providers</PageTitle>
+
+<header class="helm-header">
+    <h1>Providers <span class="subtitle">shared CLI + MCP integrations</span></h1>
+</header>
+
+<section class="mgmt-body">
+    <p class="muted">
+        A single configuration pool feeds every expert and skill invocation. Adding a provider here
+        makes it available to <em>all</em> CLIs and experts — no per-tool re-wiring.
+    </p>
+
+    <h2>Registered LLM providers</h2>
+    <table class="mgmt-table">
+        <thead>
+            <tr><th>Vendor</th><th>Transport</th><th>Status</th></tr>
+        </thead>
+        <tbody>
+        @foreach (var v in vendors)
+        {
+            <tr>
+                <td><strong>@v</strong></td>
+                <td>CLI subprocess (<code>@v --output-format json</code>)</td>
+                <td><span class="pill ok">enabled</span></td>
+            </tr>
+        }
+        </tbody>
+    </table>
+
+    <h2>Shared MCP integrations</h2>
+    <p class="muted">
+        Every provider sees the same MCP server registry. Configure a server once and all claude/gemini/codex
+        sessions inherit it. Wiring per-CLI is <em>not</em> required.
+    </p>
+    <table class="mgmt-table">
+        <thead>
+            <tr><th>Server</th><th>Transport</th><th>Status</th></tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><strong>engram-memory</strong></td>
+                <td>stdio (<code>@@anthropic/mcp-engram-memory</code>)</td>
+                <td>@(engramMcpEnabled ? "enabled" : "fallback (in-process)")</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h2>Routing policy</h2>
+    <ul class="muted">
+        <li>Failover: <strong>PriorityWeighted</strong> (claude &#x2192; gemini &#x2192; codex)</li>
+        <li>Rate-limit: 60 calls / 60s per provider (sliding window)</li>
+        <li>Preferred default for goal decomposition: <strong>claude</strong></li>
+    </ul>
+</section>
+
+@code {
+    private IReadOnlyList<string> vendors = Array.Empty<string>();
+    private bool engramMcpEnabled;
+
+    protected override Task OnInitializedAsync()
+    {
+        vendors = Orchestrator.VendorIds;
+        engramMcpEnabled = string.Equals(
+            Environment.GetEnvironmentVariable("LORDHELM_ENGRAM_MCP"),
+            "true",
+            StringComparison.OrdinalIgnoreCase);
+        return Task.CompletedTask;
+    }
+}

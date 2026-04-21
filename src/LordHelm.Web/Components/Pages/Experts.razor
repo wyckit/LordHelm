@@ -1,0 +1,63 @@
+@page "/experts"
+@rendermode InteractiveServer
+@inject LordHelm.Core.IEngramClient Engram
+
+<PageTitle>Lord Helm — Experts</PageTitle>
+
+<header class="helm-header">
+    <h1>Experts <span class="subtitle">@experts.Count registered locally</span></h1>
+</header>
+
+<section class="mgmt-body">
+    <p class="muted">
+        These are the Lord-Helm-seeded experts available in the running engram. Dispatching a goal
+        can target a specific expert via the preferred-vendor hint on the home page.
+    </p>
+
+    <table class="mgmt-table">
+        <thead>
+            <tr>
+                <th>Expert</th><th>Domain</th><th>Notes</th>
+            </tr>
+        </thead>
+        <tbody>
+        @foreach (var e in experts)
+        {
+            <tr>
+                <td><strong>@e.Id</strong></td>
+                <td>@e.Domain</td>
+                <td>@e.Notes</td>
+            </tr>
+        }
+        </tbody>
+    </table>
+</section>
+
+@code {
+    private sealed record ExpertEntry(string Id, string Domain, string Notes);
+
+    private List<ExpertEntry> experts = new();
+
+    protected override Task OnInitializedAsync()
+    {
+        // Lord-Helm-specific experts seeded during the build (stable list).
+        // A future revision will read these dynamically from the engram domain tree
+        // via IEngramClient.SearchAsync over the _system_experts namespace.
+        experts = new List<ExpertEntry>
+        {
+            new("docker_sandbox_orchestrator",        "dotnet_platform",           "ephemeral-container hardening, cap-drop policy, digest-pinned images"),
+            new("skill_manifest_architect",           "dotnet_platform",           "XML+JSON hybrid manifest design, canonicalization, hash identity"),
+            new("cli_transpiler_engineer",            "integration_infrastructure","JIT transpile skills to vendor CLI flags, cache + invalidation"),
+            new("cli_capability_scout",               "integration_infrastructure","--help parsing, CliSpec drift detection, STM->LTM promotion"),
+            new("agent_observability_ui_engineer",    "integration_infrastructure","widget grid, pre-attentive tagging, live log-tail"),
+            new("approval_gate_ux_designer",          "security_analysis",         "5-tier risk, timeout-default-deny, SHA-chained audit"),
+            new("debate_protocol_designer",           "swarm_and_collective",      "blind vote + dissent propagation + 3-round ceiling"),
+            new("engram_dataflow_orchestrator",       "bdi_and_goals",             "blackboard bus, DAG topo-sort, idempotent handlers"),
+            new("multi_provider_cli_orchestrator",    "llm_integration",           "claude + gemini + codex concurrent orchestration"),
+            new("mcp_client_protocol_engineer",       "integration_infrastructure","ModelContextProtocol C# SDK, stdio JSON-RPC, correlation + cancellation"),
+            new("concurrent_dispatch_table_engineer", "dotnet_platform",           "ImmutableDictionary + Interlocked copy-on-write table swap"),
+            new("aspnetcore_sse_streaming_engineer",  "integration_infrastructure","SSE framing, IAsyncEnumerable backpressure, Blazor EventSource interop"),
+        };
+        return Task.CompletedTask;
+    }
+}

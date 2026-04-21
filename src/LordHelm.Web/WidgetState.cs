@@ -5,7 +5,7 @@ using LordHelm.Monitor;
 
 namespace LordHelm.Web;
 
-public enum WidgetKind { Subprocess, Approval, Incident }
+public enum WidgetKind { Subprocess, Approval, Incident, Task }
 
 public sealed record WidgetModel(
     string Id,
@@ -42,32 +42,6 @@ public sealed class WidgetState
         _widgets.TryRemove(id, out _);
         _rings.TryRemove(id, out _);
         OnChanged?.Invoke();
-    }
-
-    public void RegisterPendingApproval(string widgetId, ApprovalGate.PendingApproval pending)
-    {
-        var req = pending.Request;
-        Upsert(new WidgetModel(
-            Id: widgetId,
-            Kind: WidgetKind.Approval,
-            Label: $"approval: {req.SkillId}",
-            Env: null,
-            Status: "pending-approval",
-            UpdatedAt: DateTimeOffset.UtcNow,
-            Tail: new[] { $"[APPROVAL] tier={req.RiskTier} operator={req.OperatorId}", $"[APPROVAL] summary: {req.Summary}" },
-            PendingApproval: pending));
-    }
-
-    public void ResolveApproval(string widgetId, bool approved, string reason, ApprovalGate gate)
-    {
-        if (!_widgets.TryGetValue(widgetId, out var w) || w.PendingApproval is null) return;
-        gate.Resolve(w.PendingApproval, approved, reason);
-        Upsert(w with
-        {
-            Status = approved ? "approved" : "denied",
-            UpdatedAt = DateTimeOffset.UtcNow,
-            PendingApproval = null,
-        });
     }
 
     public void AppendLog(string widgetId, string line)
@@ -108,6 +82,68 @@ public sealed class WidgetState
             UpdatedAt: ev.At,
             Tail: ring.Snapshot()));
     }
+
+    public void RegisterPendingApproval(string widgetId, ApprovalGate.PendingApproval pending)
+    {
+        var req = pending.Request;
+        Upsert(new WidgetModel(
+            Id: widgetId,
+            Kind: WidgetKind.Approval,
+            Label: $"approval: {req.SkillId}",
+            Env: null,
+            Status: "pending-approval",
+            UpdatedAt: DateTimeOffset.UtcNow,
+            Tail: new[] { $"[APPROVAL] tier={req.RiskTier} operator={req.OperatorId}", $"[APPROVAL] summary: {req.Summary}" },
+            PendingApproval: pending));
+    }
+
+    public void ResolveApproval(string widgetId, bool approved, string reason, ApprovalGate gate)
+    {
+        if (!_widgets.TryGetValue(widgetId, out var w) || w.PendingApproval is null) return;
+        gate.Resolve(w.PendingApproval, approved, reason);
+        Upsert(w with
+        {
+            Status = approved ? "approved" : "denied",
+            UpdatedAt = DateTimeOffset.UtcNow,
+            PendingApproval = null,
+        });
+    }
+
+    // ---------- goal-run integration ----------
+
+    public void StartTaskWidget(string goalId, string taskId, string label)
+    {
+        var widgetId = WidgetIdFor(goalId, taskId);
+        Upsert(new WidgetModel(
+            Id: widgetId,
+            Kind: WidgetKind.Task,
+            Label: $"{goalId[..Math.Min(12, goalId.Length)]}: {label}",
+            Env: ExecutionEnvironment.Host,
+            Status: "running",
+            UpdatedAt: DateTimeOffset.UtcNow,
+            Tail: Array.Empty<string>()));
+    }
+
+    public void AppendTaskLog(string goalId, string taskId, string line)
+        => AppendLog(WidgetIdFor(goalId, taskId), $"[TASK] {line}");
+
+    public void CompleteTaskWidget(string goalId, string taskId, bool succeeded, string? output)
+    {
+        var widgetId = WidgetIdFor(goalId, taskId);
+        if (!_widgets.TryGetValue(widgetId, out var w)) return;
+        var ring = _rings.GetOrAdd(widgetId, _ => new LogRing());
+        if (!string.IsNullOrEmpty(output)) ring.Append($"[RESULT] {Truncate(output, 200)}");
+        Upsert(w with
+        {
+            Status = succeeded ? "completed" : "failed",
+            UpdatedAt = DateTimeOffset.UtcNow,
+            Tail = ring.Snapshot(),
+        });
+    }
+
+    public static string WidgetIdFor(string goalId, string taskId) => $"{goalId}::{taskId}";
+
+    private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max] + "...";
 
     /// <summary>
     /// Create a demo widget from the UI. Spawns a fake subprocess that emits log

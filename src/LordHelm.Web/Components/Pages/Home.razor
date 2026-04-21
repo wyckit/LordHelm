@@ -4,6 +4,8 @@
 @inject LordHelm.Web.WidgetState State
 @inject IJSRuntime JS
 @inject LordHelm.Execution.ApprovalGate ApprovalGate
+@inject LordHelm.Orchestrator.IGoalRunner GoalRunner
+@inject ILogger<Home> Logger
 
 <PageTitle>Lord Helm Command Center</PageTitle>
 
@@ -19,6 +21,17 @@
         <button @onclick="ResetLayout" title="Forget saved widget layout">reset layout</button>
     </div>
 </header>
+
+<div class="goal-bar">
+    <form @onsubmit="SubmitGoal" @onsubmit:preventDefault>
+        <input type="text" @bind="goalText" @bind:event="oninput" placeholder="submit a goal — e.g. 'read C:/Software/LordHelm/README.md and summarise'" />
+        <button type="submit" disabled="@(string.IsNullOrWhiteSpace(goalText) || goalInFlight)">@(goalInFlight ? "dispatching..." : "dispatch")</button>
+    </form>
+    @if (!string.IsNullOrEmpty(lastGoalStatus))
+    {
+        <div class="goal-status">@lastGoalStatus</div>
+    }
+</div>
 
 <div class="grid-stack" id="helm-root">
     @foreach (var w in widgets)
@@ -89,6 +102,9 @@
     private int? _sseSubscription;
     private readonly List<string> liveLines = new();
     private const int LiveLinesCap = 400;
+    private string goalText = string.Empty;
+    private bool goalInFlight;
+    private string? lastGoalStatus;
 
     protected override void OnInitialized()
     {
@@ -153,6 +169,40 @@
 
     private void ResetLayout() => _ = JS.InvokeVoidAsync("helmGrid.resetLayout");
 
+    private async Task SubmitGoal()
+    {
+        var goal = goalText.Trim();
+        if (string.IsNullOrEmpty(goal) || goalInFlight) return;
+
+        goalInFlight = true;
+        lastGoalStatus = "dispatching...";
+        StateHasChanged();
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var req = new LordHelm.Orchestrator.GoalRunRequest(goal);
+                var result = await GoalRunner.RunAsync(req, CancellationToken.None);
+                lastGoalStatus = result.Succeeded
+                    ? $"goal {result.GoalId} completed with {result.DagNodeCount} task(s)"
+                    : $"goal {result.GoalId} failed: {result.ErrorDetail}";
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "Goal dispatch failed");
+                lastGoalStatus = "error: " + ex.Message;
+            }
+            finally
+            {
+                goalInFlight = false;
+                await InvokeAsync(StateHasChanged);
+            }
+        });
+
+        goalText = string.Empty;
+    }
+
     private async Task Expand(LordHelm.Web.WidgetModel w)
     {
         expanded = w;
@@ -199,6 +249,12 @@
     private static string CssFor(LordHelm.Web.WidgetModel w) => w.Kind switch
     {
         LordHelm.Web.WidgetKind.Approval => "approval",
+        LordHelm.Web.WidgetKind.Task => w.Status switch
+        {
+            "completed" => "completed",
+            "failed" => "incident",
+            _ => "task",
+        },
         _ => w.Status switch
         {
             "incident" => "incident",
@@ -211,6 +267,7 @@
     private static string IconFor(LordHelm.Web.WidgetModel w) => w.Kind switch
     {
         LordHelm.Web.WidgetKind.Approval => "[?]",
+        LordHelm.Web.WidgetKind.Task => "[task]",
         _ => w.Status switch
         {
             "incident" => "!",
