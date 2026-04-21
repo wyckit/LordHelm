@@ -23,6 +23,7 @@
     <ProjectReference Include="..\..\src\LordHelm.Orchestrator\LordHelm.Orchestrator.csproj" />
     <ProjectReference Include="..\..\src\LordHelm.Providers\LordHelm.Providers.csproj" />
     <ProjectReference Include="..\..\src\LordHelm.Monitor\LordHelm.Monitor.csproj" />
+    <ProjectReference Include="..\..\src\LordHelm.Web\LordHelm.Web.csproj" />
   </ItemGroup>
 
 </Project>

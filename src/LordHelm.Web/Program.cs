@@ -20,8 +20,6 @@ Directory.CreateDirectory(dataDir);
 var skillsDbPath = Path.Combine(dataDir, "skills.db");
 var cliSpecDbPath = Path.Combine(dataDir, "cli_specs.db");
 var auditDbPath = Path.Combine(dataDir, "audit.db");
-var skillsDir = Path.Combine(builder.Environment.ContentRootPath, "..", "..", "skills");
-skillsDir = Path.GetFullPath(skillsDir);
 
 // ---------------------------------------------------------------- UI
 builder.Services.AddRazorComponents()
@@ -29,35 +27,48 @@ builder.Services.AddRazorComponents()
 builder.Services.AddSingleton<WidgetState>();
 
 // ---------------------------------------------------------------- engram facade
-builder.Services.AddSingleton<IEngramClient, EngramClient>();
+// Default: in-process fallback client. To opt in to live MCP transport, set
+// LORDHELM_ENGRAM_MCP=true and provide the server command/args via config.
+var useMcp = string.Equals(builder.Configuration["LORDHELM_ENGRAM_MCP"]
+    ?? Environment.GetEnvironmentVariable("LORDHELM_ENGRAM_MCP"), "true", StringComparison.OrdinalIgnoreCase);
+if (useMcp)
+{
+    builder.Services.AddSingleton<McpEngramOptions>();
+    builder.Services.AddSingleton<McpEngramClient>();
+    builder.Services.AddSingleton<IEngramClient>(sp => sp.GetRequiredService<McpEngramClient>());
+    builder.Services.AddHostedService<McpEngramConnector>();
+}
+else
+{
+    builder.Services.AddSingleton<IEngramClient, EngramClient>();
+}
 
 // ---------------------------------------------------------------- skills
 builder.Services.AddSingleton<ISkillCache>(_ => new SqliteSkillCache(skillsDbPath));
 builder.Services.AddSingleton<ManifestValidator>();
 builder.Services.AddSingleton<ISkillLoader, SkillLoader>();
 
-// ---------------------------------------------------------------- transpiler
-builder.Services.AddSingleton<JitTranspiler>();
+// ---------------------------------------------------------------- transpiler + flag table
+builder.Services.AddSingleton<FlagMappingTable>(_ => FlagMappingTable.Default());
+builder.Services.AddSingleton<IScoutFlagHydrator, FlagMappingTableHydrator>();
+builder.Services.AddSingleton<JitTranspiler>(sp => new JitTranspiler(sp.GetRequiredService<FlagMappingTable>()));
 builder.Services.AddSingleton<IJitTranspiler>(sp => sp.GetRequiredService<JitTranspiler>());
 builder.Services.AddSingleton<ITranspilerCacheInvalidator>(sp => sp.GetRequiredService<JitTranspiler>());
 
 // ---------------------------------------------------------------- scout
 builder.Services.AddSingleton<ICliSpecStore>(_ => new SqliteCliSpecStore(cliSpecDbPath));
-builder.Services.AddSingleton(sp =>
+builder.Services.AddSingleton(sp => new ScoutOptions
 {
-    var invalidator = sp.GetRequiredService<ITranspilerCacheInvalidator>();
-    return new ScoutOptions
+    Interval = TimeSpan.FromMinutes(30),
+    ProbeTimeout = TimeSpan.FromSeconds(8),
+    StabilityThreshold = 3,
+    Targets = new[]
     {
-        Interval = TimeSpan.FromMinutes(30),
-        ProbeTimeout = TimeSpan.FromSeconds(8),
-        StabilityThreshold = 3,
-        Targets = new[]
-        {
-            new ScoutTarget("claude", "claude", new GnuStyleHelpParser("claude")),
-            new ScoutTarget("gemini", "gemini", new GnuStyleHelpParser("gemini")),
-            new ScoutTarget("codex",  "codex",  new GnuStyleHelpParser("codex")),
-        },
-    };
+        new ScoutTarget("claude", "claude", new GnuStyleHelpParser("claude")),
+        new ScoutTarget("gemini", "gemini", new GnuStyleHelpParser("gemini")),
+        new ScoutTarget("codex",  "codex",  new GnuStyleHelpParser("codex")),
+    },
+    FlagHydrator = sp.GetRequiredService<IScoutFlagHydrator>(),
 });
 builder.Services.AddSingleton<ScoutService>(sp => new ScoutService(
     sp.GetRequiredService<ScoutOptions>(),
@@ -93,9 +104,12 @@ builder.Services.AddSingleton<IProviderOrchestrator>(sp => new MultiProviderOrch
 // ---------------------------------------------------------------- monitor
 builder.Services.AddSingleton<Watcher>();
 builder.Services.AddSingleton<IProcessMonitor>(sp => sp.GetRequiredService<Watcher>());
+builder.Services.AddSingleton<SseLogBroadcaster>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<SseLogBroadcaster>());
 
 // ---------------------------------------------------------------- orchestrator
-builder.Services.AddSingleton<IGoalDecomposer, PassthroughGoalDecomposer>();
+builder.Services.AddSingleton<LlmDecomposerOptions>();
+builder.Services.AddSingleton<IGoalDecomposer, LlmGoalDecomposer>();
 builder.Services.AddSingleton<ILordHelmManager, LordHelmManager>();
 builder.Services.AddSingleton<IExpertProvisioner, DefaultExpertProvisioner>();
 builder.Services.AddSingleton<DataflowBus>();
@@ -131,8 +145,15 @@ app.UseAntiforgery();
 
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
+app.MapHelmLogStream();
 
 app.Run();
+
+/// <summary>
+/// Marker so <see cref="Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactory{TEntryPoint}"/>
+/// can target this top-level Program from the E2E test project.
+/// </summary>
+public partial class Program { }
 
 /// <summary>
 /// One-shot hosted service that runs on startup: scans the skills/ directory and
@@ -166,7 +187,6 @@ public sealed class SkillStartupLoader : IHostedService
         _logger.LogInformation("Skill loader: {New} new, {Skipped} unchanged, {Invalid} invalid of {Total}",
             report.Loaded, report.SkippedUnchanged, report.Invalid.Count, report.TotalFiles);
 
-        // Mirror each valid manifest into engram for cross-process recall
         foreach (var file in Directory.EnumerateFiles(skillsDir, "*.skill.xml"))
         {
             try
@@ -194,5 +214,18 @@ public sealed class SkillStartupLoader : IHostedService
         }
     }
 
+    public Task StopAsync(CancellationToken ct) => Task.CompletedTask;
+}
+
+/// <summary>
+/// Opens the MCP engram stdio connection during startup. Runs after DI composition
+/// so the rest of the system sees a connected client by the time any HostedService
+/// tries to store/search.
+/// </summary>
+public sealed class McpEngramConnector : IHostedService
+{
+    private readonly McpEngramClient _client;
+    public McpEngramConnector(McpEngramClient client) { _client = client; }
+    public Task StartAsync(CancellationToken ct) => _client.ConnectAsync(ct);
     public Task StopAsync(CancellationToken ct) => Task.CompletedTask;
 }

@@ -15,6 +15,7 @@
   <Folder Name="/tests/">
     <Project Path="tests/LordHelm.Consensus.Tests/LordHelm.Consensus.Tests.csproj" />
     <Project Path="tests/LordHelm.Core.Tests/LordHelm.Core.Tests.csproj" />
+    <Project Path="tests/LordHelm.E2E.Tests/LordHelm.E2E.Tests.csproj" />
     <Project Path="tests/LordHelm.Execution.Tests/LordHelm.Execution.Tests.csproj" />
     <Project Path="tests/LordHelm.Skills.Tests/LordHelm.Skills.Tests.csproj" />
   </Folder>

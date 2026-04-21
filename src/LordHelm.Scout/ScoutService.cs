@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using LordHelm.Skills.Transpilation;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -12,6 +13,10 @@ public sealed class ScoutOptions
     public TimeSpan ProbeTimeout { get; set; } = TimeSpan.FromSeconds(8);
     public int StabilityThreshold { get; set; } = 3;
     public IReadOnlyList<ScoutTarget> Targets { get; set; } = Array.Empty<ScoutTarget>();
+
+    /// <summary>Optional Scout-side hydrator that refreshes the JIT transpiler's flag table
+    /// on every drift cycle. Wired by the composition root (see LordHelm.Web/Program.cs).</summary>
+    public IScoutFlagHydrator? FlagHydrator { get; set; }
 }
 
 /// <summary>
@@ -59,6 +64,17 @@ public sealed class ScoutService : BackgroundService
                 }
                 var spec = t.Parser.Parse(help, version, DateTimeOffset.UtcNow);
                 var mutations = await _store.RecordAsync(spec, _options.StabilityThreshold, ct);
+
+                var flagsChangedForVendor = mutations.Any(m =>
+                    m.VendorId == t.VendorId &&
+                    m.Kind is MutationKind.Added or MutationKind.Removed or MutationKind.ChangedType or MutationKind.Archived);
+                if (flagsChangedForVendor && _options.FlagHydrator is not null)
+                {
+                    _options.FlagHydrator.DropVendorVersioned(t.VendorId);
+                    _options.FlagHydrator.Hydrate(t.VendorId, spec.Version,
+                        spec.Flags.Select(f => (f.Name, f.Default)));
+                }
+
                 foreach (var m in mutations)
                 {
                     _logger.LogInformation("Scout mutation: {Vendor} {Kind} {Flag}", m.VendorId, m.Kind, m.FlagName);

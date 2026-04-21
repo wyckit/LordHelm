@@ -71,11 +71,11 @@
             <div class="widget-head">
                 <span class="icon">@IconFor(expanded)</span>
                 <span class="label">@expanded.Label</span>
-                <span class="status">@expanded.Status</span>
+                <span class="status">@expanded.Status <small>(live)</small></span>
                 <button class="close" @onclick="CloseExpand">x</button>
             </div>
             <div class="widget-body">
-                <pre class="log">@RenderTail(expanded.Tail ?? Array.Empty<string>())</pre>
+                <pre class="log">@RenderTail(liveLines.Count > 0 ? liveLines : (expanded.Tail ?? Array.Empty<string>()))</pre>
             </div>
         </div>
     </div>
@@ -86,6 +86,9 @@
     private LordHelm.Web.WidgetModel? expanded;
     private DotNetObjectReference<Home>? _selfRef;
     private bool _gridInitialised;
+    private int? _sseSubscription;
+    private readonly List<string> liveLines = new();
+    private const int LiveLinesCap = 400;
 
     protected override void OnInitialized()
     {
@@ -150,8 +153,40 @@
 
     private void ResetLayout() => _ = JS.InvokeVoidAsync("helmGrid.resetLayout");
 
-    private void Expand(LordHelm.Web.WidgetModel w) => expanded = w;
-    private void CloseExpand() => expanded = null;
+    private async Task Expand(LordHelm.Web.WidgetModel w)
+    {
+        expanded = w;
+        liveLines.Clear();
+        if (_sseSubscription is int old) { try { await JS.InvokeVoidAsync("helmSse.unsubscribe", old); } catch { } }
+        try
+        {
+            _sseSubscription = await JS.InvokeAsync<int>("helmSse.subscribe", w.Id, _selfRef!, nameof(OnSseLines));
+        }
+        catch (JSException) { _sseSubscription = null; }
+    }
+
+    private async Task CloseExpand()
+    {
+        expanded = null;
+        liveLines.Clear();
+        if (_sseSubscription is int id)
+        {
+            try { await JS.InvokeVoidAsync("helmSse.unsubscribe", id); } catch { }
+            _sseSubscription = null;
+        }
+    }
+
+    [JSInvokable]
+    public Task OnSseLines(string[] payloads)
+    {
+        foreach (var payload in payloads)
+        {
+            liveLines.Add(payload);
+            if (liveLines.Count > LiveLinesCap)
+                liveLines.RemoveRange(0, liveLines.Count - LiveLinesCap);
+        }
+        return InvokeAsync(StateHasChanged);
+    }
 
     private void Approve(LordHelm.Web.WidgetModel w)
         => State.ResolveApproval(w.Id, approved: true, "operator approved via dashboard", ApprovalGate);
