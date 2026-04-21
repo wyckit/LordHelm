@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Skill xmlns="https://lordhelm.dev/schemas/skill-manifest/v1">
+  <Id>read-file</Id>
+  <Version>0.1.0</Version>
+  <ExecutionEnvironment>Host</ExecutionEnvironment>
+  <RequiresApproval>false</RequiresApproval>
+  <RiskTier>Read</RiskTier>
+  <Timeout>PT30S</Timeout>
+  <MinTrust>Low</MinTrust>
+  <Description>Read a UTF-8 text file from the host filesystem.</Description>
+  <Tags>
+    <Tag>filesystem</Tag>
+    <Tag>read</Tag>
+  </Tags>
+  <ParameterSchema><![CDATA[{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["path"],
+    "properties": {
+      "path": { "type": "string", "minLength": 1 },
+      "maxBytes": { "type": "integer", "minimum": 1, "maximum": 1048576, "default": 65536 }
+    },
+    "additionalProperties": false
+  }]]></ParameterSchema>
+</Skill>

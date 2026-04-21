@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           targetNamespace="https://lordhelm.dev/schemas/skill-manifest/v1"
+           xmlns="https://lordhelm.dev/schemas/skill-manifest/v1"
+           elementFormDefault="qualified">
+
+  <xs:simpleType name="SemVerType">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?" />
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="ExecutionEnvironmentType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="Host" />
+      <xs:enumeration value="Docker" />
+      <xs:enumeration value="Remote" />
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="RiskTierType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="Read" />
+      <xs:enumeration value="Write" />
+      <xs:enumeration value="Delete" />
+      <xs:enumeration value="Network" />
+      <xs:enumeration value="Exec" />
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="TrustLevelType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="None" />
+      <xs:enumeration value="Low" />
+      <xs:enumeration value="Medium" />
+      <xs:enumeration value="High" />
+      <xs:enumeration value="Full" />
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="SkillIdType">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[a-z][a-z0-9-]*[a-z0-9]" />
+      <xs:minLength value="2" />
+      <xs:maxLength value="128" />
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:element name="Skill">
+    <xs:complexType>
+      <xs:sequence>
+        <xs:element name="Id" type="SkillIdType" />
+        <xs:element name="Version" type="SemVerType" />
+        <xs:element name="ExecutionEnvironment" type="ExecutionEnvironmentType" />
+        <xs:element name="RequiresApproval" type="xs:boolean" />
+        <xs:element name="RiskTier" type="RiskTierType" />
+        <xs:element name="Timeout" type="xs:duration" />
+        <xs:element name="MinTrust" type="TrustLevelType" />
+        <xs:element name="Description" type="xs:string" minOccurs="0" />
+        <xs:element name="Tags" minOccurs="0">
+          <xs:complexType>
+            <xs:sequence>
+              <xs:element name="Tag" type="xs:string" maxOccurs="unbounded" minOccurs="0" />
+            </xs:sequence>
+          </xs:complexType>
+        </xs:element>
+        <xs:element name="ParameterSchema" type="xs:string" />
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+</xs:schema>

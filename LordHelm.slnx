@@ -1,0 +1,21 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/LordHelm.Consensus/LordHelm.Consensus.csproj" />
+    <Project Path="src/LordHelm.Core/LordHelm.Core.csproj" />
+    <Project Path="src/LordHelm.Execution/LordHelm.Execution.csproj" />
+    <Project Path="src/LordHelm.Host/LordHelm.Host.csproj" />
+    <Project Path="src/LordHelm.Mcp/LordHelm.Mcp.csproj" />
+    <Project Path="src/LordHelm.Monitor/LordHelm.Monitor.csproj" />
+    <Project Path="src/LordHelm.Orchestrator/LordHelm.Orchestrator.csproj" />
+    <Project Path="src/LordHelm.Providers/LordHelm.Providers.csproj" />
+    <Project Path="src/LordHelm.Scout/LordHelm.Scout.csproj" />
+    <Project Path="src/LordHelm.Skills/LordHelm.Skills.csproj" />
+    <Project Path="src/LordHelm.Web/LordHelm.Web.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/LordHelm.Consensus.Tests/LordHelm.Consensus.Tests.csproj" />
+    <Project Path="tests/LordHelm.Core.Tests/LordHelm.Core.Tests.csproj" />
+    <Project Path="tests/LordHelm.Execution.Tests/LordHelm.Execution.Tests.csproj" />
+    <Project Path="tests/LordHelm.Skills.Tests/LordHelm.Skills.Tests.csproj" />
+  </Folder>
+</Solution>

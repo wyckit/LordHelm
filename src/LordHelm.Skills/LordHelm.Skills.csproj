@@ -1,0 +1,31 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\LordHelm.Core\LordHelm.Core.csproj" />
+    <ProjectReference Include="..\..\..\mcps\mcp-engram-memory\src\McpEngramMemory.Core\McpEngramMemory.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Schema\skill-manifest.xsd" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.0" />
+    <PackageReference Include="NJsonSchema" Version="11.0.2" />
+    <!--
+      System.Security.Cryptography.Xml is used ONLY for C14N canonicalization of
+      locally-authored skill manifests (we own the source). The known NU1903
+      advisories (GHSA-37gx-xxp4-5rgx, GHSA-w3x6-4m5h-cxqf) concern XML signature
+      verification on untrusted input, which we do not perform.
+    -->
+    <PackageReference Include="System.Security.Cryptography.Xml" Version="9.0.11" NoWarn="NU1903" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>

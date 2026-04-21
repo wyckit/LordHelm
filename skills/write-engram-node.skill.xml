@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Skill xmlns="https://lordhelm.dev/schemas/skill-manifest/v1">
+  <Id>write-engram-node</Id>
+  <Version>0.1.0</Version>
+  <ExecutionEnvironment>Host</ExecutionEnvironment>
+  <RequiresApproval>false</RequiresApproval>
+  <RiskTier>Write</RiskTier>
+  <Timeout>PT10S</Timeout>
+  <MinTrust>Medium</MinTrust>
+  <Description>Persist a memory node into the engram graph under a given namespace.</Description>
+  <Tags>
+    <Tag>engram</Tag>
+    <Tag>memory</Tag>
+    <Tag>write</Tag>
+  </Tags>
+  <ParameterSchema><![CDATA[{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["namespace", "id", "text"],
+    "properties": {
+      "namespace": { "type": "string", "minLength": 1 },
+      "id": { "type": "string", "minLength": 1 },
+      "text": { "type": "string", "minLength": 1 },
+      "category": { "type": "string" },
+      "metadata": { "type": "object", "additionalProperties": { "type": "string" } }
+    },
+    "additionalProperties": false
+  }]]></ParameterSchema>
+</Skill>

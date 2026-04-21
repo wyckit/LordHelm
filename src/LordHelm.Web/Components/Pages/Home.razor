@@ -1,0 +1,77 @@
+@page "/"
+@rendermode InteractiveServer
+@implements IDisposable
+@inject LordHelm.Web.WidgetState State
+
+<PageTitle>Lord Helm Command Center</PageTitle>
+
+<header class="helm-header">
+    <h1>Lord Helm <span class="subtitle">command center</span></h1>
+    <div class="legend">
+        <span class="chip host">HOST</span>
+        <span class="chip sandbox">SANDBOX</span>
+        <span class="chip incident">INCIDENT</span>
+    </div>
+</header>
+
+<section class="widget-grid">
+    @if (!widgets.Any())
+    {
+        <div class="empty">No active threads. Submit a goal to spin up experts.</div>
+    }
+    @foreach (var w in widgets)
+    {
+        <div class="widget @CssFor(w)">
+            <div class="widget-head">
+                <span class="icon">@IconFor(w)</span>
+                <span class="label">@w.Label</span>
+                <span class="status">@w.Status</span>
+            </div>
+            <div class="widget-body">
+                @if (w.Tail is { Count: > 0 })
+                {
+                    <pre class="log">@string.Join("\n", w.Tail.TakeLast(8))</pre>
+                }
+                else
+                {
+                    <div class="placeholder">waiting for output…</div>
+                }
+            </div>
+            <div class="widget-foot">
+                <small>updated @w.UpdatedAt.ToLocalTime().ToString("HH:mm:ss")</small>
+            </div>
+        </div>
+    }
+</section>
+
+@code {
+    private IReadOnlyList<LordHelm.Web.WidgetModel> widgets = Array.Empty<LordHelm.Web.WidgetModel>();
+
+    protected override void OnInitialized()
+    {
+        widgets = State.Snapshot();
+        State.OnChanged += HandleChanged;
+    }
+
+    private void HandleChanged()
+    {
+        widgets = State.Snapshot();
+        InvokeAsync(StateHasChanged);
+    }
+
+    private static string CssFor(LordHelm.Web.WidgetModel w) => w.Status switch
+    {
+        "incident" => "border-incident",
+        _ when w.Env == LordHelm.Core.ExecutionEnvironment.Docker => "border-sandbox",
+        _ => "border-host",
+    };
+
+    private static string IconFor(LordHelm.Web.WidgetModel w) => w.Status switch
+    {
+        "incident" => "!",
+        _ when w.Env == LordHelm.Core.ExecutionEnvironment.Docker => "[box]",
+        _ => "[shield]",
+    };
+
+    public void Dispose() => State.OnChanged -= HandleChanged;
+}

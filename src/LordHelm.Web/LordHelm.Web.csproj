@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <ItemGroup>
+    <ProjectReference Include="..\LordHelm.Core\LordHelm.Core.csproj" />
+    <ProjectReference Include="..\LordHelm.Orchestrator\LordHelm.Orchestrator.csproj" />
+    <ProjectReference Include="..\LordHelm.Execution\LordHelm.Execution.csproj" />
+    <ProjectReference Include="..\LordHelm.Monitor\LordHelm.Monitor.csproj" />
+    <ProjectReference Include="..\LordHelm.Consensus\LordHelm.Consensus.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+</Project>
