@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using LordHelm.Core;
+using LordHelm.Execution;
 using LordHelm.Monitor;
 
 namespace LordHelm.Web;
@@ -13,7 +14,8 @@ public sealed record WidgetModel(
     ExecutionEnvironment? Env,
     string Status,
     DateTimeOffset UpdatedAt,
-    IReadOnlyList<string>? Tail = null);
+    IReadOnlyList<string>? Tail = null,
+    ApprovalGate.PendingApproval? PendingApproval = null);
 
 /// <summary>
 /// Thread-safe view-model for the Blazor dashboard. Backend services push into here;
@@ -22,6 +24,8 @@ public sealed record WidgetModel(
 public sealed class WidgetState
 {
     private readonly ConcurrentDictionary<string, WidgetModel> _widgets = new();
+    private readonly ConcurrentDictionary<string, LogRing> _rings = new();
+
     public event Action? OnChanged;
 
     public IReadOnlyList<WidgetModel> Snapshot() =>
@@ -36,10 +40,47 @@ public sealed class WidgetState
     public void Remove(string id)
     {
         _widgets.TryRemove(id, out _);
+        _rings.TryRemove(id, out _);
         OnChanged?.Invoke();
     }
 
-    public void ApplyProcessEvent(ProcessEvent ev, LogRing? ring)
+    public void RegisterPendingApproval(string widgetId, ApprovalGate.PendingApproval pending)
+    {
+        var req = pending.Request;
+        Upsert(new WidgetModel(
+            Id: widgetId,
+            Kind: WidgetKind.Approval,
+            Label: $"approval: {req.SkillId}",
+            Env: null,
+            Status: "pending-approval",
+            UpdatedAt: DateTimeOffset.UtcNow,
+            Tail: new[] { $"[APPROVAL] tier={req.RiskTier} operator={req.OperatorId}", $"[APPROVAL] summary: {req.Summary}" },
+            PendingApproval: pending));
+    }
+
+    public void ResolveApproval(string widgetId, bool approved, string reason, ApprovalGate gate)
+    {
+        if (!_widgets.TryGetValue(widgetId, out var w) || w.PendingApproval is null) return;
+        gate.Resolve(w.PendingApproval, approved, reason);
+        Upsert(w with
+        {
+            Status = approved ? "approved" : "denied",
+            UpdatedAt = DateTimeOffset.UtcNow,
+            PendingApproval = null,
+        });
+    }
+
+    public void AppendLog(string widgetId, string line)
+    {
+        var ring = _rings.GetOrAdd(widgetId, _ => new LogRing());
+        ring.Append(line);
+        if (_widgets.TryGetValue(widgetId, out var existing))
+        {
+            Upsert(existing with { Tail = ring.Snapshot(), UpdatedAt = DateTimeOffset.UtcNow });
+        }
+    }
+
+    public void ApplyProcessEvent(ProcessEvent ev)
     {
         var env = ev.Label.Contains("sandbox", StringComparison.OrdinalIgnoreCase)
             ? ExecutionEnvironment.Docker
@@ -51,6 +92,13 @@ public sealed class WidgetState
             ProcessEventKind.Incident => "incident",
             _ => _widgets.TryGetValue(ev.SubprocessId, out var existing) ? existing.Status : "running",
         };
+        var ring = _rings.GetOrAdd(ev.SubprocessId, _ => new LogRing());
+        if (!string.IsNullOrEmpty(ev.Line))
+        {
+            var tag = ev.Kind == ProcessEventKind.Stderr ? "[ERR]" :
+                env == ExecutionEnvironment.Docker ? "[SANDBOX]" : "[HOST]";
+            ring.Append($"{tag} {ev.Line}");
+        }
         Upsert(new WidgetModel(
             Id: ev.SubprocessId,
             Kind: WidgetKind.Subprocess,
@@ -58,6 +106,42 @@ public sealed class WidgetState
             Env: env,
             Status: status,
             UpdatedAt: ev.At,
-            Tail: ring?.Snapshot()));
+            Tail: ring.Snapshot()));
+    }
+
+    /// <summary>
+    /// Create a demo widget from the UI. Spawns a fake subprocess that emits log
+    /// lines for ~20 seconds so the grid has something to render without a
+    /// real backend wired up.
+    /// </summary>
+    public void SpawnDemo(string id, string label, ExecutionEnvironment env)
+    {
+        Upsert(new WidgetModel(id, WidgetKind.Subprocess, label, env, "running", DateTimeOffset.UtcNow, Array.Empty<string>()));
+        _ = Task.Run(async () =>
+        {
+            var rng = new Random();
+            var steps = new[]
+            {
+                "initialising expert loadout",
+                "acquired skill: read-file v0.1.0",
+                "engram recall: 3 hits in lord_helm_skills",
+                "transpiled invocation for claude v2.1.0",
+                "stdout: 128 bytes",
+                "stdout: 512 bytes",
+                "stdout: 1024 bytes",
+                "cpu: 14.2%  rss: 48MB",
+                "completed skill invocation",
+                "writing result node to engram",
+            };
+            for (int i = 0; i < steps.Length; i++)
+            {
+                await Task.Delay(rng.Next(600, 1400));
+                AppendLog(id, steps[i]);
+            }
+            if (_widgets.TryGetValue(id, out var w))
+            {
+                Upsert(w with { Status = "completed", UpdatedAt = DateTimeOffset.UtcNow });
+            }
+        });
     }
 }

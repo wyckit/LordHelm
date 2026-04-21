@@ -6,6 +6,9 @@
     <ProjectReference Include="..\LordHelm.Execution\LordHelm.Execution.csproj" />
     <ProjectReference Include="..\LordHelm.Monitor\LordHelm.Monitor.csproj" />
     <ProjectReference Include="..\LordHelm.Consensus\LordHelm.Consensus.csproj" />
+    <ProjectReference Include="..\LordHelm.Skills\LordHelm.Skills.csproj" />
+    <ProjectReference Include="..\LordHelm.Scout\LordHelm.Scout.csproj" />
+    <ProjectReference Include="..\LordHelm.Providers\LordHelm.Providers.csproj" />
   </ItemGroup>
 
   <PropertyGroup>

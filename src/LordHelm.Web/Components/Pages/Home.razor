@@ -1,7 +1,9 @@
 @page "/"
 @rendermode InteractiveServer
-@implements IDisposable
+@implements IAsyncDisposable
 @inject LordHelm.Web.WidgetState State
+@inject IJSRuntime JS
+@inject LordHelm.Execution.ApprovalGate ApprovalGate
 
 <PageTitle>Lord Helm Command Center</PageTitle>
 
@@ -12,40 +14,78 @@
         <span class="chip sandbox">SANDBOX</span>
         <span class="chip incident">INCIDENT</span>
     </div>
+    <div class="helm-toolbar">
+        <button @onclick="AddDemoWidget" title="Spawn a simulated expert thread">+ spawn</button>
+        <button @onclick="ResetLayout" title="Forget saved widget layout">reset layout</button>
+    </div>
 </header>
 
-<section class="widget-grid">
-    @if (!widgets.Any())
-    {
-        <div class="empty">No active threads. Submit a goal to spin up experts.</div>
-    }
+<div class="grid-stack" id="helm-root">
     @foreach (var w in widgets)
     {
-        <div class="widget @CssFor(w)">
-            <div class="widget-head">
-                <span class="icon">@IconFor(w)</span>
-                <span class="label">@w.Label</span>
-                <span class="status">@w.Status</span>
-            </div>
-            <div class="widget-body">
-                @if (w.Tail is { Count: > 0 })
-                {
-                    <pre class="log">@string.Join("\n", w.Tail.TakeLast(8))</pre>
-                }
-                else
-                {
-                    <div class="placeholder">waiting for output…</div>
-                }
-            </div>
-            <div class="widget-foot">
-                <small>updated @w.UpdatedAt.ToLocalTime().ToString("HH:mm:ss")</small>
+        <div class="grid-stack-item @CssFor(w)"
+             gs-id="@w.Id"
+             gs-w="@DefaultWidth(w)" gs-h="@DefaultHeight(w)"
+             gs-min-w="2" gs-min-h="2">
+            <div class="grid-stack-item-content">
+                <div class="widget-head">
+                    <span class="icon">@IconFor(w)</span>
+                    <span class="label">@w.Label</span>
+                    <span class="status">@w.Status</span>
+                    <button class="expand-btn" @onclick="() => Expand(w)" title="Expand log">[ ]</button>
+                </div>
+                <div class="widget-body">
+                    @if (w.Tail is { Count: > 0 })
+                    {
+                        <pre class="log">@RenderTail(w.Tail.TakeLast(10))</pre>
+                    }
+                    else
+                    {
+                        <div class="placeholder">waiting for output...</div>
+                    }
+                    @if (w.Kind == LordHelm.Web.WidgetKind.Approval && w.PendingApproval is not null)
+                    {
+                        <div class="approval-actions">
+                            <button class="approve" @onclick="() => Approve(w)">approve</button>
+                            <button class="deny" @onclick="() => Deny(w)">deny</button>
+                        </div>
+                    }
+                </div>
+                <div class="widget-foot">
+                    <span>@w.Env</span>
+                    <span>@w.UpdatedAt.ToLocalTime().ToString("HH:mm:ss")</span>
+                </div>
             </div>
         </div>
     }
-</section>
+</div>
+@if (!widgets.Any())
+{
+    <div class="empty-overlay">No active threads. Click "+ spawn" to instantiate a demo widget.</div>
+}
+
+@if (expanded is not null)
+{
+    <div class="log-modal-backdrop" @onclick="CloseExpand">
+        <div class="log-modal" @onclick:stopPropagation>
+            <div class="widget-head">
+                <span class="icon">@IconFor(expanded)</span>
+                <span class="label">@expanded.Label</span>
+                <span class="status">@expanded.Status</span>
+                <button class="close" @onclick="CloseExpand">x</button>
+            </div>
+            <div class="widget-body">
+                <pre class="log">@RenderTail(expanded.Tail ?? Array.Empty<string>())</pre>
+            </div>
+        </div>
+    </div>
+}
 
 @code {
     private IReadOnlyList<LordHelm.Web.WidgetModel> widgets = Array.Empty<LordHelm.Web.WidgetModel>();
+    private LordHelm.Web.WidgetModel? expanded;
+    private DotNetObjectReference<Home>? _selfRef;
+    private bool _gridInitialised;
 
     protected override void OnInitialized()
     {
@@ -53,25 +93,117 @@
         State.OnChanged += HandleChanged;
     }
 
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _selfRef = DotNetObjectReference.Create(this);
+            try
+            {
+                await JS.InvokeVoidAsync("helmGrid.init", "#helm-root", _selfRef);
+                _gridInitialised = true;
+            }
+            catch (JSException ex)
+            {
+                Console.Error.WriteLine($"gridstack init failed: {ex.Message}");
+            }
+        }
+        else if (_gridInitialised)
+        {
+            try { await JS.InvokeVoidAsync("helmGrid.applyLayout"); } catch { }
+        }
+    }
+
+    [JSInvokable]
+    public Task ReloadWidgets()
+    {
+        widgets = State.Snapshot();
+        return InvokeAsync(StateHasChanged);
+    }
+
     private void HandleChanged()
     {
         widgets = State.Snapshot();
+        if (expanded is not null)
+        {
+            expanded = widgets.FirstOrDefault(w => w.Id == expanded.Id) ?? expanded;
+        }
         InvokeAsync(StateHasChanged);
     }
 
-    private static string CssFor(LordHelm.Web.WidgetModel w) => w.Status switch
+    private void AddDemoWidget()
     {
-        "incident" => "border-incident",
-        _ when w.Env == LordHelm.Core.ExecutionEnvironment.Docker => "border-sandbox",
-        _ => "border-host",
+        var id = "demo-" + Guid.NewGuid().ToString("N")[..6];
+        var env = Random.Shared.Next(3) switch
+        {
+            0 => LordHelm.Core.ExecutionEnvironment.Host,
+            1 => LordHelm.Core.ExecutionEnvironment.Docker,
+            _ => LordHelm.Core.ExecutionEnvironment.Docker,
+        };
+        var label = env switch
+        {
+            LordHelm.Core.ExecutionEnvironment.Docker => "sandbox: exec-python",
+            _ => "host: read-file",
+        };
+        State.SpawnDemo(id, label, env);
+    }
+
+    private void ResetLayout() => _ = JS.InvokeVoidAsync("helmGrid.resetLayout");
+
+    private void Expand(LordHelm.Web.WidgetModel w) => expanded = w;
+    private void CloseExpand() => expanded = null;
+
+    private void Approve(LordHelm.Web.WidgetModel w)
+        => State.ResolveApproval(w.Id, approved: true, "operator approved via dashboard", ApprovalGate);
+    private void Deny(LordHelm.Web.WidgetModel w)
+        => State.ResolveApproval(w.Id, approved: false, "operator denied via dashboard", ApprovalGate);
+
+    private static int DefaultWidth(LordHelm.Web.WidgetModel w) => 4;
+    private static int DefaultHeight(LordHelm.Web.WidgetModel w) => 3;
+
+    private static string CssFor(LordHelm.Web.WidgetModel w) => w.Kind switch
+    {
+        LordHelm.Web.WidgetKind.Approval => "approval",
+        _ => w.Status switch
+        {
+            "incident" => "incident",
+            "completed" => "completed",
+            _ when w.Env == LordHelm.Core.ExecutionEnvironment.Docker => "sandbox",
+            _ => "host",
+        },
     };
 
-    private static string IconFor(LordHelm.Web.WidgetModel w) => w.Status switch
+    private static string IconFor(LordHelm.Web.WidgetModel w) => w.Kind switch
     {
-        "incident" => "!",
-        _ when w.Env == LordHelm.Core.ExecutionEnvironment.Docker => "[box]",
-        _ => "[shield]",
+        LordHelm.Web.WidgetKind.Approval => "[?]",
+        _ => w.Status switch
+        {
+            "incident" => "!",
+            _ when w.Env == LordHelm.Core.ExecutionEnvironment.Docker => "[box]",
+            _ => "[host]",
+        },
     };
 
-    public void Dispose() => State.OnChanged -= HandleChanged;
+    private static MarkupString RenderTail(IEnumerable<string> lines)
+    {
+        var sb = new System.Text.StringBuilder();
+        foreach (var line in lines)
+        {
+            var klass =
+                line.StartsWith("[HOST]") || line.StartsWith("[OUT]") ? "host" :
+                line.StartsWith("[SANDBOX]") ? "sandbox" :
+                line.StartsWith("[ERR]") || line.Contains("error", StringComparison.OrdinalIgnoreCase) ? "err" :
+                "";
+            var escaped = System.Net.WebUtility.HtmlEncode(line);
+            sb.Append($"<span class='{klass}'>{escaped}</span>\n");
+        }
+        return new MarkupString(sb.ToString());
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        State.OnChanged -= HandleChanged;
+        _selfRef?.Dispose();
+        return ValueTask.CompletedTask;
+    }
 }

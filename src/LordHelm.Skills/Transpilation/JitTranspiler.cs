@@ -16,7 +16,7 @@ public interface IJitTranspiler
     void InvalidateAll();
 }
 
-public sealed class JitTranspiler : IJitTranspiler
+public sealed class JitTranspiler : IJitTranspiler, ITranspilerCacheInvalidator
 {
     private readonly FlagMappingTable _map;
     private readonly ConcurrentDictionary<(string skillHash, string vendor, string version, TargetShell shell), TranspiledInvocation> _cache = new();
