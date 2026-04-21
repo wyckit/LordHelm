@@ -15,13 +15,13 @@ public sealed record GoalRunResult(
     bool Succeeded,
     int DagNodeCount,
     IReadOnlyDictionary<string, string> NodeOutputs,
+    string? Synthesis,
     string? ErrorDetail);
 
 /// <summary>
-/// End-to-end goal execution. Combines <see cref="ILordHelmManager"/> (decompose + topo-sort)
-/// with <see cref="IExpertProvisioner"/> (provision per-task runners) into a single call so
-/// callers — HTTP endpoint, Blazor UI, CLI, MCP server — all go through the same path.
-/// Progress is reported to the registered <see cref="IGoalProgressSink"/>.
+/// End-to-end goal execution. Combines Manager + Provisioner + Synthesiser into a
+/// single call so every caller (HTTP, UI, CLI, MCP) goes through the same path.
+/// Emits progress to the registered <see cref="IGoalProgressSink"/>.
 /// </summary>
 public interface IGoalRunner
 {
@@ -30,9 +30,12 @@ public interface IGoalRunner
 
 public sealed class GoalRunner : IGoalRunner
 {
+    private static readonly string[] _vendorRotation = { "claude", "gemini", "codex" };
+
     private readonly ILordHelmManager _manager;
     private readonly IExpertProvisioner _provisioner;
     private readonly ISkillCache _skills;
+    private readonly ISynthesizer _synthesizer;
     private readonly IGoalProgressSink _sink;
     private readonly ILogger<GoalRunner> _logger;
 
@@ -40,12 +43,14 @@ public sealed class GoalRunner : IGoalRunner
         ILordHelmManager manager,
         IExpertProvisioner provisioner,
         ISkillCache skills,
+        ISynthesizer synthesizer,
         IGoalProgressSink sink,
         ILogger<GoalRunner> logger)
     {
         _manager = manager;
         _provisioner = provisioner;
         _skills = skills;
+        _synthesizer = synthesizer;
         _sink = sink;
         _logger = logger;
     }
@@ -53,75 +58,99 @@ public sealed class GoalRunner : IGoalRunner
     public async Task<GoalRunResult> RunAsync(GoalRunRequest req, CancellationToken ct = default)
     {
         var goalId = "goal-" + Guid.NewGuid().ToString("N")[..10];
-        var vendor = req.PreferredVendor ?? "claude";
-        var model = req.Model ?? "claude-opus-4-7";
+        var defaultVendor = req.PreferredVendor ?? "claude";
+        var defaultModel = req.Model ?? "claude-opus-4-7";
 
         var skills = await _skills.ListAsync(ct);
         _logger.LogInformation("Goal {Id} starting: {Goal}", goalId, req.Goal);
 
         await _sink.OnGoalStartedAsync(goalId, req.Goal, 0, ct);
 
-        var result = await _manager.RunAsync(
+        var managerResult = await _manager.RunAsync(
             req.Goal,
             skills,
-            executeTask: async node =>
+            executeTask: async (node, memberIndex, innerCt) =>
             {
-                await _sink.OnTaskStartedAsync(goalId, node.Id, node.Goal, ct);
+                var vendor = node.PreferredVendor
+                    ?? (node.SwarmSize > 1 && node.SwarmStrategy == SwarmStrategy.Diverse
+                        ? _vendorRotation[memberIndex % _vendorRotation.Length]
+                        : defaultVendor);
+                var memberTaskId = node.SwarmSize > 1 ? $"{node.Id}#m{memberIndex}" : node.Id;
+                var memberLabel = node.SwarmSize > 1
+                    ? $"{node.Goal} [{node.Persona ?? "expert"} via {vendor} #m{memberIndex}]"
+                    : node.Goal;
+
+                await _sink.OnTaskStartedAsync(goalId, memberTaskId, memberLabel, innerCt);
                 try
                 {
-                    var skillId = PickSkill(node, skills);
+                    var skillId = node.Skill ?? PickSkill(node, skills);
                     if (skillId is null)
                     {
                         var synthesisOutput = $"(synthesis) {node.Goal}";
-                        await _sink.OnTaskLogAsync(goalId, node.Id, "no skill match; synthesis step", ct);
-                        await _sink.OnTaskCompletedAsync(goalId, node.Id, true, synthesisOutput, ct);
+                        await _sink.OnTaskLogAsync(goalId, memberTaskId, "no skill match; synthesis step", innerCt);
+                        await _sink.OnTaskCompletedAsync(goalId, memberTaskId, true, synthesisOutput, innerCt);
                         return synthesisOutput;
                     }
 
-                    var provisionReq = new ProvisionRequest(
-                        ExpertId: "expert-" + node.Id,
+                    var provReq = new ProvisionRequest(
+                        ExpertId: $"expert-{memberTaskId}",
                         SkillId: skillId,
                         CliVendorId: vendor,
-                        Model: model,
-                        Goal: node.Goal);
-                    var expert = await _provisioner.ProvisionAsync(provisionReq, ct);
+                        Model: defaultModel,
+                        Goal: node.Goal,
+                        Persona: node.Persona);
+                    var expert = await _provisioner.ProvisionAsync(provReq, innerCt);
                     if (expert is null)
                     {
                         var msg = $"skill '{skillId}' not found";
-                        await _sink.OnTaskLogAsync(goalId, node.Id, msg, ct);
-                        await _sink.OnTaskCompletedAsync(goalId, node.Id, false, msg, ct);
+                        await _sink.OnTaskLogAsync(goalId, memberTaskId, msg, innerCt);
+                        await _sink.OnTaskCompletedAsync(goalId, memberTaskId, false, msg, innerCt);
                         throw new InvalidOperationException(msg);
                     }
 
-                    await _sink.OnTaskLogAsync(goalId, node.Id, $"provisioned expert with skill '{skillId}' on vendor '{vendor}'", ct);
-                    var output = await expert.Run(ct);
-                    await _sink.OnTaskLogAsync(goalId, node.Id, output, ct);
-                    await _sink.OnTaskCompletedAsync(goalId, node.Id, true, output, ct);
+                    await _sink.OnTaskLogAsync(goalId, memberTaskId,
+                        $"provisioned {expert.Profile.ExpertId} with skill '{skillId}' on {vendor}", innerCt);
+                    var output = await expert.Run(innerCt);
+                    await _sink.OnTaskLogAsync(goalId, memberTaskId, output, innerCt);
+                    await _sink.OnTaskCompletedAsync(goalId, memberTaskId, true, output, innerCt);
                     return output;
                 }
                 catch (Exception ex)
                 {
-                    await _sink.OnTaskCompletedAsync(goalId, node.Id, false, ex.Message, ct);
+                    await _sink.OnTaskCompletedAsync(goalId, memberTaskId, false, ex.Message, innerCt);
                     throw;
                 }
             },
             ct);
 
-        await _sink.OnGoalCompletedAsync(goalId, result.Succeeded, result.ErrorDetail, ct);
+        string? synthesis = null;
+        if (managerResult.Succeeded)
+        {
+            try
+            {
+                synthesis = await _synthesizer.SynthesizeAsync(
+                    new SynthesisRequest(req.Goal, managerResult.Dag, managerResult.NodeOutputs),
+                    ct);
+                await _sink.OnTaskLogAsync(goalId, "goal", "synthesis: " + Truncate(synthesis, 200), ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Synthesis failed for goal {Id}", goalId);
+            }
+        }
+
+        await _sink.OnGoalCompletedAsync(goalId, managerResult.Succeeded,
+            managerResult.ErrorDetail ?? synthesis, ct);
 
         return new GoalRunResult(
             goalId,
-            result.Succeeded,
-            result.Dag.Count,
-            result.NodeOutputs,
-            result.ErrorDetail);
+            managerResult.Succeeded,
+            managerResult.Dag.Count,
+            managerResult.NodeOutputs,
+            synthesis,
+            managerResult.ErrorDetail);
     }
 
-    /// <summary>
-    /// Naive skill matcher: prefer a skill whose id appears in the node goal text,
-    /// otherwise the first skill whose tag set intersects the goal, otherwise null.
-    /// A future revision can upgrade this to a semantic match via IEngramClient.SearchAsync.
-    /// </summary>
     public static string? PickSkill(TaskNode node, IReadOnlyList<SkillManifest> skills)
     {
         if (skills.Count == 0) return null;
@@ -132,4 +161,6 @@ public sealed class GoalRunner : IGoalRunner
         }
         return null;
     }
+
+    private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max] + "...";
 }

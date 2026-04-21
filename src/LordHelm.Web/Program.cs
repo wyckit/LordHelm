@@ -110,6 +110,9 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<SseLogBroadcaster>
 // ---------------------------------------------------------------- orchestrator
 builder.Services.AddSingleton<LlmDecomposerOptions>();
 builder.Services.AddSingleton<IGoalDecomposer, LlmGoalDecomposer>();
+builder.Services.AddSingleton<ExpertDirectory>(_ => ExpertDirectory.Default());
+builder.Services.AddSingleton<ISwarmAggregator, ConcatSwarmAggregator>();
+builder.Services.AddSingleton<ISynthesizer, LlmSynthesizer>();
 builder.Services.AddSingleton<ILordHelmManager, LordHelmManager>();
 builder.Services.AddSingleton<IExpertProvisioner, DefaultExpertProvisioner>();
 builder.Services.AddSingleton<DataflowBus>();

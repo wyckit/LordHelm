@@ -26,7 +26,7 @@ public sealed class LordHelmMcpServer : ILordHelmMcpServer
         var goalId = Guid.NewGuid().ToString("N");
         var skills = _skillsProvider();
         var result = await _manager.RunAsync(req.Goal, skills,
-            node => Task.FromResult($"(stub) executed {node.Id}: {node.Goal}"), ct);
+            (node, memberIndex, innerCt) => Task.FromResult($"(stub) executed {node.Id}#m{memberIndex}: {node.Goal}"), ct);
         return new DispatchGoalResponse(goalId, result.Succeeded, result.ErrorDetail, result.Dag.Count);
     }
 

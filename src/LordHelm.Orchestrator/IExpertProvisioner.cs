@@ -12,18 +12,20 @@ public sealed record ProvisionRequest(
     string CliVendorId,
     string Model,
     string Goal,
-    string? ArgsJson = null);
+    string? ArgsJson = null,
+    string? Persona = null,
+    string? SystemHint = null);
 
 public sealed record ProvisionedExpert(ExpertProfile Profile, ExpertRunner Run);
 
 public delegate Task<string> ExpertRunner(CancellationToken ct);
 
 /// <summary>
-/// Builds an <see cref="ExpertProfile"/> from a <see cref="ProvisionRequest"/>, resolves
-/// the required skills from <see cref="ISkillCache"/>, and returns an
-/// <see cref="ExpertRunner"/> closure that routes invocation through
-/// <see cref="IExecutionRouter"/>. This is the concrete "Dynamic Assembly" step of
-/// the Think Tank Workflow (spec §4.2).
+/// Builds an <see cref="ExpertProfile"/> for a sub-task, resolves the required skill
+/// from <see cref="ISkillCache"/>, composes an <see cref="ExpertRunner"/> closure that
+/// routes through <see cref="IExecutionRouter"/>, and optionally specialises the
+/// expert with a persona pulled from <see cref="ExpertDirectory"/>. This is the
+/// concrete "Dynamic Assembly" step of the Think Tank Workflow (spec §4.2).
 /// </summary>
 public interface IExpertProvisioner
 {
@@ -34,17 +36,20 @@ public sealed class DefaultExpertProvisioner : IExpertProvisioner
 {
     private readonly ISkillCache _skills;
     private readonly IExecutionRouter _router;
+    private readonly ExpertDirectory _directory;
     private readonly ILogger<DefaultExpertProvisioner> _logger;
     private readonly string _defaultShell;
 
     public DefaultExpertProvisioner(
         ISkillCache skills,
         IExecutionRouter router,
+        ExpertDirectory directory,
         ILogger<DefaultExpertProvisioner> logger,
         string? defaultShell = null)
     {
         _skills = skills;
         _router = router;
+        _directory = directory;
         _logger = logger;
         _defaultShell = defaultShell ?? (OperatingSystem.IsWindows() ? "PowerShell" : "Bash");
     }
@@ -58,11 +63,17 @@ public sealed class DefaultExpertProvisioner : IExpertProvisioner
             return null;
         }
 
+        // Resolve persona from directory if one is named.
+        var persona = req.Persona is null ? null : _directory.Get(req.Persona);
+        var vendor = persona?.PreferredVendor ?? req.CliVendorId;
+        var model = persona?.Model ?? req.Model;
+
         var profile = new ExpertProfile(
-            ExpertId: req.ExpertId,
-            CliVendorId: req.CliVendorId,
-            Model: req.Model,
-            SkillLoadout: new[] { req.SkillId },
+            ExpertId: persona is null ? req.ExpertId : $"{persona.Id}::{req.ExpertId}",
+            CliVendorId: vendor,
+            Model: model,
+            SkillLoadout: persona?.PreferredSkills.Concat(new[] { req.SkillId }).Distinct().ToArray()
+                ?? new[] { req.SkillId },
             GoalContext: req.Goal);
 
         var shell = Enum.TryParse<TargetShell>(_defaultShell, out var parsed) ? parsed : TargetShell.Bash;
