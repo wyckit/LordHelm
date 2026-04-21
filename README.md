@@ -113,7 +113,17 @@ For first-time setup and day-to-day launches:
 .\scripts\start.ps1 -HealthOnly
 ```
 
-`install.ps1` accepts `-SkipTests`, `-SkipDockerPull`, and `-SandboxImage <digest-pinned-ref>` to customize the bootstrap.
+`install.ps1` detects missing prerequisites (.NET SDK 9/10, Docker Desktop, Git, Node.js, the `claude` / `gemini` / `codex` CLIs, and the sibling `McpEngramMemory` repo) and offers a Yes/No prompt to install each one. Installers use `winget` for Windows packages, `git clone` for the engram repo, and `npm -g` for the provider CLIs.
+
+```powershell
+.\scripts\install.ps1               # interactive prompts per missing item
+.\scripts\install.ps1 -AutoInstall  # accept every install prompt
+.\scripts\install.ps1 -NoInstall    # report what is missing and continue
+```
+
+Additional flags: `-SkipTests`, `-SkipDockerPull`, `-SandboxImage <ref>`, `-EngramRepoUrl <url>`.
+
+If Docker Desktop is installed during the session, Windows typically requires a reboot and manual launch of Docker Desktop to accept the service agreement before the daemon becomes reachable.
 
 ---
 
