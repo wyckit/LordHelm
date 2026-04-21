@@ -92,6 +92,29 @@ dotnet run --project src/LordHelm.Host
 dotnet run --project src/LordHelm.Web
 ```
 
+### Windows PowerShell scripts
+
+For first-time setup and day-to-day launches:
+
+```powershell
+# Verify prerequisites, restore, build, test, pre-pull sandbox image
+.\scripts\install.ps1
+
+# Launch host health check + Blazor dashboard (default)
+.\scripts\start.ps1
+
+# Just the dashboard on a custom URL
+.\scripts\start.ps1 -WebOnly -Url http://localhost:7080
+
+# Just the headless host composition root
+.\scripts\start.ps1 -HostOnly
+
+# One-shot health check
+.\scripts\start.ps1 -HealthOnly
+```
+
+`install.ps1` accepts `-SkipTests`, `-SkipDockerPull`, and `-SandboxImage <digest-pinned-ref>` to customize the bootstrap.
+
 ---
 
 ## Key Design Invariants
