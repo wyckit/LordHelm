@@ -1,0 +1,71 @@
+@page "/models"
+@rendermode InteractiveServer
+@inject LordHelm.Orchestrator.IModelCatalog Catalog
+
+<PageTitle>Lord Helm — Models</PageTitle>
+
+<header class="helm-header">
+    <h1>Models <span class="subtitle">@models.Count available across @vendors.Count vendors</span></h1>
+</header>
+
+<section class="mgmt-body">
+    <p class="muted">
+        Tier-based model selection: the decomposer and operators request a <strong>tier</strong>
+        (<code>fast</code> / <code>deep</code> / <code>code</code>); the catalog picks the best
+        concrete model available. Switch vendors without touching business logic.
+    </p>
+
+    <h2>Available models</h2>
+    <table class="mgmt-table">
+        <thead>
+            <tr><th>Vendor</th><th>Model</th><th>Tier</th><th>Status</th><th>Description</th><th>Last probed</th></tr>
+        </thead>
+        <tbody>
+        @foreach (var m in models)
+        {
+            <tr>
+                <td><strong>@m.VendorId</strong></td>
+                <td class="mono">@m.ModelId</td>
+                <td><span class="pill tier-@m.Tier.ToString().ToLowerInvariant()">@m.Tier</span></td>
+                <td>@(m.IsAvailable ? "available" : "unreachable")</td>
+                <td>@m.Description</td>
+                <td class="mono">@m.LastProbed.ToLocalTime().ToString("HH:mm:ss")</td>
+            </tr>
+        }
+        </tbody>
+    </table>
+
+    <h2>Tier resolution</h2>
+    <ul class="muted">
+        <li><code>fast</code> → @(Catalog.Resolve(LordHelm.Orchestrator.ModelTier.Fast)?.ModelId ?? "(none available)")</li>
+        <li><code>deep</code> → @(Catalog.Resolve(LordHelm.Orchestrator.ModelTier.Deep)?.ModelId ?? "(none available)")</li>
+        <li><code>code</code> → @(Catalog.Resolve(LordHelm.Orchestrator.ModelTier.Code)?.ModelId ?? "(none available)")</li>
+    </ul>
+
+    @if (mcpTools.Count > 0)
+    {
+        <h2>MCP tools registered</h2>
+        <table class="mgmt-table">
+            <thead><tr><th>Server</th><th>Tool</th><th>Description</th></tr></thead>
+            <tbody>
+            @foreach (var t in mcpTools)
+            {
+                <tr><td><strong>@t.ServerName</strong></td><td class="mono">@t.ToolName</td><td>@t.Description</td></tr>
+            }
+            </tbody>
+        </table>
+    }
+</section>
+
+@code {
+    private IReadOnlyList<LordHelm.Orchestrator.ModelEntry> models = Array.Empty<LordHelm.Orchestrator.ModelEntry>();
+    private HashSet<string> vendors = new();
+    private IReadOnlyList<LordHelm.Orchestrator.McpToolEntry> mcpTools = Array.Empty<LordHelm.Orchestrator.McpToolEntry>();
+
+    protected override void OnInitialized()
+    {
+        models = Catalog.GetModels();
+        vendors = models.Select(m => m.VendorId).ToHashSet();
+        mcpTools = Catalog.GetMcpTools();
+    }
+}

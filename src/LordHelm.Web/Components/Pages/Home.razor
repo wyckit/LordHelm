@@ -5,6 +5,7 @@
 @inject IJSRuntime JS
 @inject LordHelm.Execution.ApprovalGate ApprovalGate
 @inject LordHelm.Orchestrator.IGoalRunner GoalRunner
+@inject LordHelm.Orchestrator.IModelCatalog ModelCatalog
 @inject ILogger<Home> Logger
 
 <PageTitle>Lord Helm Command Center</PageTitle>
@@ -25,12 +26,26 @@
 <div class="goal-bar">
     <form @onsubmit="SubmitGoal" @onsubmit:preventDefault>
         <input type="text" @bind="goalText" @bind:event="oninput" placeholder="submit a goal — e.g. 'read C:/Software/LordHelm/README.md and summarise'" />
+        <select @bind="selectedTier" title="Model tier">
+            <option value="Deep">deep</option>
+            <option value="Fast">fast</option>
+            <option value="Code">code</option>
+        </select>
+        <select @bind="selectedVendor" title="Preferred vendor">
+            <option value="">auto vendor</option>
+            <option value="claude">claude</option>
+            <option value="gemini">gemini</option>
+            <option value="codex">codex</option>
+        </select>
         <button type="submit" disabled="@(string.IsNullOrWhiteSpace(goalText) || goalInFlight)">@(goalInFlight ? "dispatching..." : "dispatch")</button>
     </form>
-    @if (!string.IsNullOrEmpty(lastGoalStatus))
-    {
-        <div class="goal-status">@lastGoalStatus</div>
-    }
+    <div class="goal-status">
+        resolved model: <code>@(ResolveModelPreview() ?? "(none)")</code>
+        @if (!string.IsNullOrEmpty(lastGoalStatus))
+        {
+            <span> — @lastGoalStatus</span>
+        }
+    </div>
 </div>
 
 <div class="grid-stack" id="helm-root">
@@ -105,6 +120,16 @@
     private string goalText = string.Empty;
     private bool goalInFlight;
     private string? lastGoalStatus;
+    private string selectedTier = "Deep";
+    private string selectedVendor = string.Empty;
+
+    private string? ResolveModelPreview()
+    {
+        if (!Enum.TryParse<LordHelm.Orchestrator.ModelTier>(selectedTier, true, out var tier))
+            tier = LordHelm.Orchestrator.ModelTier.Deep;
+        var preferred = string.IsNullOrEmpty(selectedVendor) ? null : selectedVendor;
+        return ModelCatalog.Resolve(tier, preferred)?.ModelId;
+    }
 
     protected override void OnInitialized()
     {
@@ -178,11 +203,14 @@
         lastGoalStatus = "dispatching...";
         StateHasChanged();
 
+        var resolved = ResolveModelPreview();
+        var vendor = string.IsNullOrEmpty(selectedVendor) ? null : selectedVendor;
+
         _ = Task.Run(async () =>
         {
             try
             {
-                var req = new LordHelm.Orchestrator.GoalRunRequest(goal);
+                var req = new LordHelm.Orchestrator.GoalRunRequest(goal, vendor, resolved);
                 var result = await GoalRunner.RunAsync(req, CancellationToken.None);
                 lastGoalStatus = result.Succeeded
                     ? $"goal {result.GoalId} completed with {result.DagNodeCount} task(s)"

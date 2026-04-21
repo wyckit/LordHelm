@@ -109,11 +109,22 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<SseLogBroadcaster>
 
 // ---------------------------------------------------------------- orchestrator
 builder.Services.AddSingleton<LlmDecomposerOptions>();
+builder.Services.AddSingleton<IModelCatalog>(_ => new ModelCatalog());
 builder.Services.AddSingleton<IGoalDecomposer, LlmGoalDecomposer>();
 builder.Services.AddSingleton<ExpertDirectory>(_ => ExpertDirectory.Default());
-builder.Services.AddSingleton<ISwarmAggregator, ConcatSwarmAggregator>();
+var useLlmAggregator = string.Equals(builder.Configuration["LORDHELM_LLM_SWARM"]
+    ?? Environment.GetEnvironmentVariable("LORDHELM_LLM_SWARM"), "true", StringComparison.OrdinalIgnoreCase);
+if (useLlmAggregator)
+    builder.Services.AddSingleton<ISwarmAggregator, LlmSwarmAggregator>();
+else
+    builder.Services.AddSingleton<ISwarmAggregator, ConcatSwarmAggregator>();
 builder.Services.AddSingleton<ISynthesizer, LlmSynthesizer>();
-builder.Services.AddSingleton<ILordHelmManager, LordHelmManager>();
+var useEngramDriven = string.Equals(builder.Configuration["LORDHELM_ENGRAM_DRIVEN"]
+    ?? Environment.GetEnvironmentVariable("LORDHELM_ENGRAM_DRIVEN"), "true", StringComparison.OrdinalIgnoreCase);
+if (useEngramDriven)
+    builder.Services.AddSingleton<ILordHelmManager, EngramDrivenManager>();
+else
+    builder.Services.AddSingleton<ILordHelmManager, LordHelmManager>();
 builder.Services.AddSingleton<IExpertProvisioner, DefaultExpertProvisioner>();
 builder.Services.AddSingleton<DataflowBus>();
 builder.Services.AddSingleton<IDataflowBus>(sp => sp.GetRequiredService<DataflowBus>());

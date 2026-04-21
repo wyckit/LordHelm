@@ -79,23 +79,38 @@ static async Task<int> RunCliFunctionalAsync()
 
 static async Task<int> RunGoalAsync(string[] rest)
 {
-    if (rest.Length == 0)
+    // Parse --model <id>, --vendor <name>, --tier <fast|deep|code>, then the goal string.
+    string? model = null, vendor = null, tier = null;
+    var goalWords = new List<string>();
+    for (int i = 0; i < rest.Length; i++)
+    {
+        var a = rest[i];
+        if (a == "--model" && i + 1 < rest.Length) { model = rest[++i]; }
+        else if (a == "--vendor" && i + 1 < rest.Length) { vendor = rest[++i]; }
+        else if (a == "--tier" && i + 1 < rest.Length) { tier = rest[++i]; }
+        else goalWords.Add(a);
+    }
+    if (goalWords.Count == 0)
     {
         AnsiConsole.MarkupLine("[red]goal: requires a goal string.[/]");
-        AnsiConsole.MarkupLine("  example: [yellow]dotnet run --project src/LordHelm.Host -- goal \"summarise README.md\"[/]");
+        AnsiConsole.MarkupLine("  example: [yellow]dotnet run --project src/LordHelm.Host -- goal --tier deep \"summarise README.md\"[/]");
+        AnsiConsole.MarkupLine("  flags: [yellow]--vendor claude|gemini|codex[/]  [yellow]--model <id>[/]  [yellow]--tier fast|deep|code[/]");
         return 2;
     }
-    var goal = string.Join(' ', rest);
+    var goal = string.Join(' ', goalWords);
     var url = Environment.GetEnvironmentVariable("LORDHELM_WEB_URL") ?? "http://localhost:5080";
 
     AnsiConsole.MarkupLine($"[cyan]Dispatching goal to {url}/api/goals[/]");
     AnsiConsole.MarkupLine($"  goal: [white]{Markup.Escape(goal)}[/]");
+    if (vendor is not null) AnsiConsole.MarkupLine($"  vendor: [yellow]{vendor}[/]");
+    if (model is not null)  AnsiConsole.MarkupLine($"  model:  [yellow]{model}[/]");
+    if (tier is not null)   AnsiConsole.MarkupLine($"  tier:   [yellow]{tier}[/]");
     AnsiConsole.WriteLine();
 
     using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
     try
     {
-        var body = new { goal };
+        var body = new { goal, preferredVendor = vendor, model, tier };
         var resp = await http.PostAsJsonAsync($"{url}/api/goals", body);
         var json = await resp.Content.ReadAsStringAsync();
         if (!resp.IsSuccessStatusCode)

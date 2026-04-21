@@ -81,6 +81,15 @@ html, body {
     padding: 6px 10px; font-family: inherit; font-size: 12px;
 }
 .goal-bar input[type="text"]:focus { outline: none; border-color: var(--host); }
+.goal-bar select {
+    background: var(--panel); color: var(--fg); border: 1px solid var(--panel-edge);
+    padding: 6px 8px; font-family: inherit; font-size: 11px;
+}
+.goal-bar select:focus { outline: none; border-color: var(--host); }
+.goal-bar code { background: #060b12; padding: 1px 5px; color: var(--sandbox-1); }
+.pill.tier-fast  { color: var(--sandbox-2); border-color: var(--sandbox-2); }
+.pill.tier-deep  { color: var(--host);      border-color: var(--host); }
+.pill.tier-code  { color: var(--sandbox-1); border-color: var(--sandbox-1); }
 .goal-bar button {
     background: transparent; color: var(--host); border: 1px solid var(--host);
     padding: 6px 14px; font-family: inherit; font-size: 12px; cursor: pointer;
