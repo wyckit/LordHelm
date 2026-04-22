@@ -20,25 +20,53 @@
     }
     else
     {
-        <div class="alerts-list">
-        @foreach (var a in all)
+        @foreach (var bucket in Buckets)
         {
-            <div class="alert-card alert-@a.Kind.ToString().ToLowerInvariant() @(a.Read ? "read" : "unread")"
-                 @onclick="() => MarkRead(a.Id)">
-                <div class="alert-head">
-                    <span class="alert-kind">@a.Kind</span>
-                    <span class="alert-source">@a.Source</span>
-                    <span class="alert-time">@a.At.ToLocalTime().ToString("HH:mm:ss")</span>
+            var items = all.Where(a => a.Kind == bucket.Kind).ToList();
+            if (items.Count == 0) continue;
+
+            <div class="alert-bucket alert-bucket-@bucket.Kind.ToString().ToLowerInvariant()">
+                <div class="alert-bucket-head">
+                    <span>@bucket.Label</span>
+                    <span class="bucket-count">@items.Count</span>
+                    @if (items.Any(i => !i.Read))
+                    {
+                        <button class="bucket-action" @onclick="() => MarkBucketRead(bucket.Kind)">mark group read</button>
+                    }
                 </div>
-                <div class="alert-title">@a.Title</div>
-                <pre class="alert-body">@a.Body</pre>
+                <div class="alerts-list">
+                @foreach (var a in items)
+                {
+                    <div class="alert-card alert-@a.Kind.ToString().ToLowerInvariant() @(a.Read ? "read" : "unread")"
+                         @onclick="() => MarkRead(a.Id)">
+                        <div class="alert-head">
+                            <span class="alert-kind">@a.Kind</span>
+                            <span class="alert-source">@a.Source</span>
+                            <span class="alert-time">@a.At.ToLocalTime().ToString("HH:mm:ss")</span>
+                        </div>
+                        <div class="alert-title">@a.Title</div>
+                        <pre class="alert-body">@a.Body</pre>
+                    </div>
+                }
+                </div>
             </div>
         }
-        </div>
     }
 </section>
 
 @code {
+    private record Bucket(LordHelm.Core.AlertKind Kind, string Label);
+
+    // Severity order: Error > Attention > Warning > DoneForNow > Info
+    private static readonly IReadOnlyList<Bucket> Buckets = new Bucket[]
+    {
+        new(LordHelm.Core.AlertKind.Error,      "Errors"),
+        new(LordHelm.Core.AlertKind.Attention,  "Needs Attention"),
+        new(LordHelm.Core.AlertKind.Warning,    "Warnings"),
+        new(LordHelm.Core.AlertKind.DoneForNow, "Done For Now"),
+        new(LordHelm.Core.AlertKind.Info,       "Info"),
+    };
+
     private IReadOnlyList<LordHelm.Core.AlertEntry> all = Array.Empty<LordHelm.Core.AlertEntry>();
 
     protected override void OnInitialized()
@@ -56,6 +84,12 @@
     private async Task MarkRead(string id) => await Tray.MarkReadAsync(id);
     private async Task MarkAllRead() => await Tray.MarkAllReadAsync();
     private async Task Clear() => await Tray.ClearAsync();
+
+    private async Task MarkBucketRead(LordHelm.Core.AlertKind kind)
+    {
+        foreach (var a in all.Where(a => a.Kind == kind && !a.Read))
+            await Tray.MarkReadAsync(a.Id);
+    }
 
     public void Dispose() => Tray.OnChanged -= HandleChanged;
 }

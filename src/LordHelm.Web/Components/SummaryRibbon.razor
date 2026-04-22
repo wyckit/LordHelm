@@ -1,0 +1,79 @@
+@rendermode InteractiveServer
+@implements IDisposable
+@inject LordHelm.Providers.IProviderHealth ProviderHealth
+@inject LordHelm.Core.IAlertTray AlertTray
+@inject LordHelm.Orchestrator.Overseers.OverseerRegistry Registry
+@inject LordHelm.Web.WidgetState State
+
+<div class="summary-ribbon">
+    <span class="ribbon-label">system</span>
+
+    @foreach (var v in health)
+    {
+        var pct = v.WindowLimit == 0 ? 0 : (int)(v.InFlight * 100.0 / v.WindowLimit);
+        var tone = !v.IsHealthy ? "err" : pct >= 80 ? "warn" : pct >= 60 ? "amber" : "ok";
+        <span class="ribbon-vendor ribbon-@tone" title="@(v.LastError ?? $"{v.InFlight}/{v.WindowLimit} calls in last {v.Window.TotalSeconds:0}s")">
+            @v.VendorId
+            <span class="ribbon-num">@v.InFlight/@v.WindowLimit</span>
+        </span>
+    }
+
+    <span class="ribbon-gap"></span>
+
+    <span class="ribbon-chip ribbon-agents" title="running + waiting-attention overseers">
+        agents <span class="ribbon-num">@runningAgents</span>
+    </span>
+    <span class="ribbon-chip ribbon-tasks" title="active task widgets">
+        tasks <span class="ribbon-num">@runningTasks</span>
+    </span>
+    <a href="/alerts" class="ribbon-chip ribbon-alerts @(unreadAlerts > 0 ? "has-unread" : "")" title="unread alerts">
+        alerts <span class="ribbon-num">@unreadAlerts</span>
+    </a>
+</div>
+
+@code {
+    private IReadOnlyList<LordHelm.Providers.VendorHealth> health = Array.Empty<LordHelm.Providers.VendorHealth>();
+    private int runningAgents;
+    private int runningTasks;
+    private int unreadAlerts;
+    private System.Timers.Timer? _poll;
+
+    protected override void OnInitialized()
+    {
+        Refresh();
+        AlertTray.OnChanged += HandleChanged;
+        Registry.OnChanged += HandleChanged;
+        State.OnChanged += HandleChanged;
+        // Poll governor usage every 2s — in-flight counts are stale read-only numbers
+        // that don't fire change events from the orchestrator side.
+        _poll = new System.Timers.Timer(2000) { AutoReset = true };
+        _poll.Elapsed += (_, __) => HandleChanged();
+        _poll.Start();
+    }
+
+    private void HandleChanged()
+    {
+        Refresh();
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void Refresh()
+    {
+        health = ProviderHealth.GetAll();
+        unreadAlerts = AlertTray.UnreadCount;
+        runningAgents = Registry.Snapshot()
+            .Count(s => s.Enabled &&
+                s.LastStatus is LordHelm.Orchestrator.Overseers.OverseerStatus.Working
+                             or LordHelm.Orchestrator.Overseers.OverseerStatus.WaitingForAttention);
+        runningTasks = State.Snapshot().Count(w => w.BucketOf() == "Running");
+    }
+
+    public void Dispose()
+    {
+        AlertTray.OnChanged -= HandleChanged;
+        Registry.OnChanged -= HandleChanged;
+        State.OnChanged -= HandleChanged;
+        _poll?.Stop();
+        _poll?.Dispose();
+    }
+}

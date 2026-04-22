@@ -6,6 +6,7 @@
 @inject LordHelm.Execution.ApprovalGate ApprovalGate
 @inject LordHelm.Orchestrator.IGoalRunner GoalRunner
 @inject LordHelm.Orchestrator.IModelCatalog ModelCatalog
+@inject NavigationManager Nav
 @inject ILogger<Home> Logger
 
 <PageTitle>Lord Helm Command Center</PageTitle>
@@ -106,6 +107,25 @@
                             </div>
                         }
                     </div>
+                    @if (w.BucketOf() == "Running" && w.Kind == LordHelm.Web.WidgetKind.Task)
+                    {
+                        var tierKey = GetOrInit(redirectTier, w.Id, "Deep");
+                        var vendorKey = GetOrInit(redirectVendor, w.Id, "");
+                        <div class="task-redirect" title="Redirect: apply a different tier / vendor to subsequent dispatches">
+                            <select value="@tierKey" @onchange="e => redirectTier[w.Id] = e.Value?.ToString() ?? tierKey">
+                                <option value="Deep">deep</option>
+                                <option value="Fast">fast</option>
+                                <option value="Code">code</option>
+                            </select>
+                            <select value="@vendorKey" @onchange="e => redirectVendor[w.Id] = e.Value?.ToString() ?? vendorKey">
+                                <option value="">auto</option>
+                                <option value="claude">claude</option>
+                                <option value="gemini">gemini</option>
+                                <option value="codex">codex</option>
+                            </select>
+                            <button @onclick="() => RedirectTask(w)">apply</button>
+                        </div>
+                    }
                     <div class="widget-foot">
                         <span>@(w.Env?.ToString() ?? w.Kind.ToString())</span>
                         <span>@w.UpdatedAt.ToLocalTime().ToString("HH:mm:ss")</span>
@@ -151,6 +171,33 @@
     private string selectedTier = "Deep";
     private string selectedVendor = string.Empty;
     private string? _activeFilter;
+    private readonly Dictionary<string, string> redirectTier = new();
+    private readonly Dictionary<string, string> redirectVendor = new();
+
+    protected override void OnParametersSet()
+    {
+        // /skills?goal=... prefills the goal bar when the operator clicks a run button.
+        var uri = new Uri(Nav.Uri);
+        var query = System.Web.HttpUtility.ParseQueryString(uri.Query);
+        var fromQuery = query["goal"];
+        if (!string.IsNullOrEmpty(fromQuery) && string.IsNullOrEmpty(goalText))
+        {
+            goalText = fromQuery;
+        }
+    }
+
+    private static string GetOrInit(Dictionary<string, string> map, string key, string defaultValue)
+    {
+        if (!map.TryGetValue(key, out var v)) { map[key] = defaultValue; return defaultValue; }
+        return v;
+    }
+
+    private void RedirectTask(LordHelm.Web.WidgetModel w)
+    {
+        selectedTier = redirectTier.GetValueOrDefault(w.Id, "Deep");
+        selectedVendor = redirectVendor.GetValueOrDefault(w.Id, "");
+        lastGoalStatus = $"redirect applied: tier={selectedTier} vendor={(string.IsNullOrEmpty(selectedVendor) ? "auto" : selectedVendor)} will be used for the next goal.";
+    }
 
     // ---- status buckets: attention-ordered ----
     private record Bucket(string Key, string Label, string Icon, string Description);

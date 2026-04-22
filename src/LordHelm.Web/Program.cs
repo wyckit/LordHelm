@@ -108,7 +108,7 @@ builder.Services.AddSingleton<IExecutionRouter, ExecutionRouter>();
 builder.Services.AddSingleton<ClaudeCliModelClient>();
 builder.Services.AddSingleton<GeminiCliModelClient>();
 builder.Services.AddSingleton<CodexCliModelClient>();
-builder.Services.AddSingleton<IProviderOrchestrator>(sp => new MultiProviderOrchestrator(
+builder.Services.AddSingleton<MultiProviderOrchestrator>(sp => new MultiProviderOrchestrator(
     providers: new[]
     {
         new ProviderConfig("claude", "claude-opus-4-7", new RateLimitGovernor(60, TimeSpan.FromMinutes(1)), sp.GetRequiredService<ClaudeCliModelClient>(), Priority: 100),
@@ -117,6 +117,8 @@ builder.Services.AddSingleton<IProviderOrchestrator>(sp => new MultiProviderOrch
     },
     policy: FailoverPolicy.PriorityWeighted,
     logger: sp.GetRequiredService<ILogger<MultiProviderOrchestrator>>()));
+builder.Services.AddSingleton<IProviderOrchestrator>(sp => sp.GetRequiredService<MultiProviderOrchestrator>());
+builder.Services.AddSingleton<IProviderHealth>(sp => sp.GetRequiredService<MultiProviderOrchestrator>());
 
 // ---------------------------------------------------------------- monitor
 builder.Services.AddSingleton<Watcher>();

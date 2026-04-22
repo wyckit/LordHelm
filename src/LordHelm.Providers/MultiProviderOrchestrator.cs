@@ -20,11 +20,12 @@ public interface IProviderOrchestrator
     Task<ProviderResponse> GenerateWithFailoverAsync(string preferredVendor, string? modelOverride, string prompt, int maxTokens = 512, float temperature = 0.1f, CancellationToken ct = default);
 }
 
-public sealed class MultiProviderOrchestrator : IProviderOrchestrator
+public sealed class MultiProviderOrchestrator : IProviderOrchestrator, IProviderHealth
 {
     private readonly Dictionary<string, ProviderConfig> _providers;
     private readonly FailoverPolicy _policy;
     private readonly ILogger<MultiProviderOrchestrator> _logger;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string?> _lastErrors = new();
     private int _rrIndex;
 
     public MultiProviderOrchestrator(IEnumerable<ProviderConfig> providers, FailoverPolicy policy, ILogger<MultiProviderOrchestrator> logger)
@@ -36,6 +37,24 @@ public sealed class MultiProviderOrchestrator : IProviderOrchestrator
 
     public IReadOnlyList<string> VendorIds => _providers.Keys.ToList();
 
+    public IReadOnlyList<VendorHealth> GetAll() =>
+        _providers.Values.Select(BuildHealth).ToList();
+
+    public VendorHealth? Get(string vendorId) =>
+        _providers.TryGetValue(vendorId, out var p) ? BuildHealth(p) : null;
+
+    private VendorHealth BuildHealth(ProviderConfig p)
+    {
+        var err = _lastErrors.TryGetValue(p.VendorId, out var e) ? e : null;
+        return new VendorHealth(
+            VendorId: p.VendorId,
+            InFlight: p.Governor.InFlight,
+            WindowLimit: p.Governor.MaxCallsPerWindow,
+            Window: p.Governor.Window,
+            IsHealthy: err is null,
+            LastError: err);
+    }
+
     public async Task<ProviderResponse> GenerateAsync(string vendorId, string? modelOverride, string prompt, int maxTokens = 512, float temperature = 0.1f, CancellationToken ct = default)
     {
         if (!_providers.TryGetValue(vendorId, out var p))
@@ -46,12 +65,17 @@ public sealed class MultiProviderOrchestrator : IProviderOrchestrator
         {
             var model = modelOverride ?? p.DefaultModel;
             var text = await p.Client.GenerateAsync(model, prompt, maxTokens, temperature, ct);
-            return text is null
-                ? new ProviderResponse(string.Empty, Array.Empty<ToolCall>(), new UsageRecord(0, 0, 0), new ErrorRecord("null_response", $"{vendorId} returned null"))
-                : new ProviderResponse(text, Array.Empty<ToolCall>(), EstimateUsage(prompt, text), null);
+            if (text is null)
+            {
+                _lastErrors[vendorId] = "null_response";
+                return new ProviderResponse(string.Empty, Array.Empty<ToolCall>(), new UsageRecord(0, 0, 0), new ErrorRecord("null_response", $"{vendorId} returned null"));
+            }
+            _lastErrors[vendorId] = null;
+            return new ProviderResponse(text, Array.Empty<ToolCall>(), EstimateUsage(prompt, text), null);
         }
         catch (Exception ex)
         {
+            _lastErrors[vendorId] = ex.Message;
             _logger.LogWarning(ex, "Provider {Vendor} failed", vendorId);
             return new ProviderResponse(string.Empty, Array.Empty<ToolCall>(), new UsageRecord(0, 0, 0), new ErrorRecord("exception", ex.Message));
         }

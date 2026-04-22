@@ -1,6 +1,7 @@
 @page "/skills"
 @rendermode InteractiveServer
 @inject LordHelm.Skills.ISkillCache Cache
+@inject NavigationManager Nav
 
 <PageTitle>Lord Helm — Skills</PageTitle>
 
@@ -21,7 +22,7 @@
         <table class="mgmt-table">
             <thead>
                 <tr>
-                    <th>Id</th><th>Version</th><th>Env</th><th>Risk</th><th>Timeout</th><th>MinTrust</th><th>Hash</th>
+                    <th>Id</th><th>Version</th><th>Env</th><th>Risk</th><th>Timeout</th><th>MinTrust</th><th>Hash</th><th></th>
                 </tr>
             </thead>
             <tbody>
@@ -35,6 +36,9 @@
                     <td>@s.Timeout</td>
                     <td>@s.MinTrust</td>
                     <td class="mono">@s.ContentHashSha256.Substring(0, 12)...</td>
+                    <td>
+                        <button class="run-skill" @onclick="() => RunSkill(s)" title="Prefill the goal bar with an invocation for this skill">run</button>
+                    </td>
                 </tr>
             }
             </tbody>
@@ -49,5 +53,19 @@
     {
         await Cache.InitializeAsync();
         skills = await Cache.ListAsync();
+    }
+
+    private void RunSkill(LordHelm.Core.SkillManifest s)
+    {
+        // Prefill the dashboard goal bar via a query param so the operator lands on
+        // the ready-to-dispatch form. Home.razor reads ?goal=... from the URL.
+        var template = s.Id switch
+        {
+            "read-file"         => $"use the {s.Id} skill to read a file",
+            "execute-python"    => $"use the {s.Id} skill to run a small python snippet",
+            "write-engram-node" => $"use the {s.Id} skill to record a note in engram",
+            _ => $"invoke the {s.Id} skill",
+        };
+        Nav.NavigateTo($"/?goal={Uri.EscapeDataString(template)}", forceLoad: false);
     }
 }

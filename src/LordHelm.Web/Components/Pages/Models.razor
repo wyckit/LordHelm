@@ -6,40 +6,63 @@
 
 <header class="helm-header">
     <h1>Models <span class="subtitle">@models.Count available across @vendors.Count vendors</span></h1>
+    <div class="helm-toolbar">
+        <select @bind="compareTierStr" title="Baseline tier for cost delta">
+            <option value="Deep">deep</option>
+            <option value="Fast">fast</option>
+            <option value="Code">code</option>
+        </select>
+        <select @bind="compareVendor" title="Baseline vendor">
+            <option value="">claude</option>
+            <option value="claude">claude</option>
+            <option value="gemini">gemini</option>
+            <option value="codex">codex</option>
+        </select>
+    </div>
 </header>
 
 <section class="mgmt-body">
     <p class="muted">
-        Tier-based model selection: the decomposer and operators request a <strong>tier</strong>
+        Tier-based model selection. The decomposer and operators request a tier
         (<code>fast</code> / <code>deep</code> / <code>code</code>); the catalog picks the best
-        concrete model available. Switch vendors without touching business logic.
+        concrete model available. The <strong>delta</strong> column shows each model's relative
+        cost vs. the baseline you pick above (placeholder until a price feed is plumbed in).
     </p>
 
     <h2>Available models</h2>
     <table class="mgmt-table">
         <thead>
-            <tr><th>Vendor</th><th>Model</th><th>Tier</th><th>Status</th><th>Description</th><th>Last probed</th></tr>
+            <tr>
+                <th>Vendor</th><th>Model</th><th>Tier</th><th>Status</th><th>Delta vs baseline</th><th>Description</th><th></th>
+            </tr>
         </thead>
         <tbody>
         @foreach (var m in models)
         {
+            var delta = EstimateDelta(m);
             <tr>
                 <td><strong>@m.VendorId</strong></td>
                 <td class="mono">@m.ModelId</td>
                 <td><span class="pill tier-@m.Tier.ToString().ToLowerInvariant()">@m.Tier</span></td>
                 <td>@(m.IsAvailable ? "available" : "unreachable")</td>
-                <td>@m.Description</td>
-                <td class="mono">@m.LastProbed.ToLocalTime().ToString("HH:mm:ss")</td>
+                <td class="cost-delta @(delta.Sign)">@delta.Label</td>
+                <td class="muted">@m.Description</td>
+                <td>
+                    @if (m.IsAvailable)
+                    {
+                        <button class="set-default" @onclick="() => SetBaseline(m)">set baseline</button>
+                    }
+                </td>
             </tr>
         }
         </tbody>
     </table>
 
-    <h2>Tier resolution</h2>
+    <h2>Tier resolution (against current baseline vendor)</h2>
     <ul class="muted">
-        <li><code>fast</code> → @(Catalog.Resolve(LordHelm.Orchestrator.ModelTier.Fast)?.ModelId ?? "(none available)")</li>
-        <li><code>deep</code> → @(Catalog.Resolve(LordHelm.Orchestrator.ModelTier.Deep)?.ModelId ?? "(none available)")</li>
-        <li><code>code</code> → @(Catalog.Resolve(LordHelm.Orchestrator.ModelTier.Code)?.ModelId ?? "(none available)")</li>
+        <li><code>fast</code> → @(Catalog.Resolve(LordHelm.Orchestrator.ModelTier.Fast, Baseline())?.ModelId ?? "(none)")</li>
+        <li><code>deep</code> → @(Catalog.Resolve(LordHelm.Orchestrator.ModelTier.Deep, Baseline())?.ModelId ?? "(none)")</li>
+        <li><code>code</code> → @(Catalog.Resolve(LordHelm.Orchestrator.ModelTier.Code, Baseline())?.ModelId ?? "(none)")</li>
     </ul>
 
     @if (mcpTools.Count > 0)
@@ -61,11 +84,42 @@
     private IReadOnlyList<LordHelm.Orchestrator.ModelEntry> models = Array.Empty<LordHelm.Orchestrator.ModelEntry>();
     private HashSet<string> vendors = new();
     private IReadOnlyList<LordHelm.Orchestrator.McpToolEntry> mcpTools = Array.Empty<LordHelm.Orchestrator.McpToolEntry>();
+    private string compareTierStr = "Deep";
+    private string compareVendor = "claude";
 
     protected override void OnInitialized()
     {
         models = Catalog.GetModels();
         vendors = models.Select(m => m.VendorId).ToHashSet();
         mcpTools = Catalog.GetMcpTools();
+    }
+
+    private string? Baseline() => string.IsNullOrEmpty(compareVendor) ? null : compareVendor;
+
+    private void SetBaseline(LordHelm.Orchestrator.ModelEntry m)
+    {
+        compareVendor = m.VendorId;
+        compareTierStr = m.Tier.ToString();
+    }
+
+    private (string Label, string Sign) EstimateDelta(LordHelm.Orchestrator.ModelEntry m)
+    {
+        // Placeholder: until we plumb a real price feed we score by tier (deep = 1x, fast = 0.1x,
+        // code = 0.3x) relative to the baseline tier. Keeps the column honest (operators can see
+        // "this is cheaper") without inventing dollar amounts.
+        static double Cost(LordHelm.Orchestrator.ModelTier t) => t switch
+        {
+            LordHelm.Orchestrator.ModelTier.Deep => 1.0,
+            LordHelm.Orchestrator.ModelTier.Code => 0.3,
+            LordHelm.Orchestrator.ModelTier.Fast => 0.1,
+            _ => 1.0,
+        };
+        if (!Enum.TryParse<LordHelm.Orchestrator.ModelTier>(compareTierStr, true, out var baseTier))
+            return ("—", "");
+        var rel = Cost(m.Tier) / Cost(baseTier);
+        if (Math.Abs(rel - 1.0) < 0.01) return ("baseline", "");
+        var sign = rel < 1 ? "better" : "worse";
+        var pct = (int)Math.Round(Math.Abs(1 - rel) * 100);
+        return (rel < 1 ? $"-{pct}%" : $"+{pct}%", sign);
     }
 }

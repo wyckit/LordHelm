@@ -1,6 +1,8 @@
 @page "/providers"
 @rendermode InteractiveServer
+@implements IDisposable
 @inject LordHelm.Providers.IProviderOrchestrator Orchestrator
+@inject LordHelm.Providers.IProviderHealth Health
 
 <PageTitle>Lord Helm — Providers</PageTitle>
 
@@ -10,40 +12,42 @@
 
 <section class="mgmt-body">
     <p class="muted">
-        A single configuration pool feeds every expert and skill invocation. Adding a provider here
-        makes it available to <em>all</em> CLIs and experts — no per-tool re-wiring.
+        One configuration pool feeds every expert. The health strip below is live —
+        each vendor's rolling-window usage against its rate limit, amber at 80 %, red at 100 %.
+        Budget Overseer pushes Warning alerts when a soft cap is hit.
     </p>
 
-    <h2>Registered LLM providers</h2>
-    <table class="mgmt-table">
-        <thead>
-            <tr><th>Vendor</th><th>Transport</th><th>Status</th></tr>
-        </thead>
-        <tbody>
-        @foreach (var v in vendors)
-        {
-            <tr>
-                <td><strong>@v</strong></td>
-                <td>CLI subprocess (<code>@v --output-format json</code>)</td>
-                <td><span class="pill ok">enabled</span></td>
-            </tr>
-        }
-        </tbody>
-    </table>
+    <h2>Live vendor health</h2>
+    @foreach (var v in health)
+    {
+        var pct = v.WindowLimit == 0 ? 0 : (int)(v.InFlight * 100.0 / v.WindowLimit);
+        var cls = !v.IsHealthy ? "over-red" : pct >= 80 ? "over-red" : pct >= 60 ? "over-amber" : "";
+        <div class="vendor-live @cls">
+            <strong style="width:70px">@v.VendorId</strong>
+            <span class="mono" style="width:120px">@v.InFlight / @v.WindowLimit calls / @v.Window.TotalSeconds:0s</span>
+            <div class="meter"><div class="meter-fill" style="width:@(Math.Min(100, pct))%"></div></div>
+            <span style="width:40px; text-align:right">@pct%</span>
+            <span class="pill @(v.IsHealthy ? "ok" : "")" style="border-color:@(v.IsHealthy ? "var(--sandbox-2)" : "var(--incident-1)"); color:@(v.IsHealthy ? "var(--sandbox-2)" : "var(--incident-1)")">
+                @(v.IsHealthy ? "healthy" : "degraded")
+            </span>
+            @if (!v.IsHealthy)
+            {
+                <span class="muted" style="font-size:10px">@v.LastError</span>
+            }
+        </div>
+    }
 
     <h2>Shared MCP integrations</h2>
     <p class="muted">
-        Every provider sees the same MCP server registry. Configure a server once and all claude/gemini/codex
-        sessions inherit it. Wiring per-CLI is <em>not</em> required.
+        Every provider sees the same MCP server registry. Configure once; all claude/gemini/codex
+        sessions inherit it.
     </p>
     <table class="mgmt-table">
-        <thead>
-            <tr><th>Server</th><th>Transport</th><th>Status</th></tr>
-        </thead>
+        <thead><tr><th>Server</th><th>Transport</th><th>Status</th></tr></thead>
         <tbody>
             <tr>
                 <td><strong>engram-memory</strong></td>
-                <td>stdio (<code>@@anthropic/mcp-engram-memory</code>)</td>
+                <td>stdio (<code>McpEngramMemory.Core</code> 0.8.1 global tool)</td>
                 <td>@(engramMcpEnabled ? "enabled" : "fallback (in-process)")</td>
             </tr>
         </tbody>
@@ -58,16 +62,22 @@
 </section>
 
 @code {
-    private IReadOnlyList<string> vendors = Array.Empty<string>();
+    private IReadOnlyList<LordHelm.Providers.VendorHealth> health = Array.Empty<LordHelm.Providers.VendorHealth>();
     private bool engramMcpEnabled;
+    private System.Timers.Timer? _poll;
 
-    protected override Task OnInitializedAsync()
+    protected override void OnInitialized()
     {
-        vendors = Orchestrator.VendorIds;
+        Refresh();
         engramMcpEnabled = string.Equals(
             Environment.GetEnvironmentVariable("LORDHELM_ENGRAM_MCP"),
-            "true",
-            StringComparison.OrdinalIgnoreCase);
-        return Task.CompletedTask;
+            "true", StringComparison.OrdinalIgnoreCase);
+        _poll = new System.Timers.Timer(1500) { AutoReset = true };
+        _poll.Elapsed += (_, __) => { Refresh(); InvokeAsync(StateHasChanged); };
+        _poll.Start();
     }
+
+    private void Refresh() => health = Health.GetAll();
+
+    public void Dispose() { _poll?.Stop(); _poll?.Dispose(); }
 }
