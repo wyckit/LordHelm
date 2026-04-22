@@ -3,6 +3,7 @@ using LordHelm.Core;
 using LordHelm.Execution;
 using LordHelm.Monitor;
 using LordHelm.Orchestrator;
+using LordHelm.Orchestrator.Overseers;
 using LordHelm.Providers;
 using LordHelm.Scout;
 using LordHelm.Scout.Parsers;
@@ -147,6 +148,19 @@ builder.Services.AddSingleton<IDataflowBus>(sp => sp.GetRequiredService<Dataflow
 builder.Services.AddSingleton<IGoalProgressSink, WidgetGoalProgressSink>();
 builder.Services.AddSingleton<IGoalRunner, GoalRunner>();
 
+// ---------------------------------------------------------------- overseer agents
+builder.Services.AddSingleton<IAlertTray, InMemoryAlertTray>();
+builder.Services.AddSingleton<OverseerRegistry>();
+builder.Services.AddSingleton<OverseerRunnerOptions>();
+builder.Services.AddSingleton<OverseerRunner>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<OverseerRunner>());
+builder.Services.AddSingleton<DocumentCuratorAgent>(sp =>
+{
+    var repoRoot = Path.GetFullPath(Path.Combine(builder.Environment.ContentRootPath, "..", ".."));
+    return new DocumentCuratorAgent(repoRoot, sp.GetRequiredService<ILogger<DocumentCuratorAgent>>());
+});
+builder.Services.AddHostedService<OverseerBootstrapHostedService>();
+
 // ---------------------------------------------------------------- consensus
 builder.Services.AddSingleton<INoveltyCheck, TokenOverlapNoveltyCheck>();
 builder.Services.AddSingleton<DiagnosticPanelOptions>();
@@ -187,6 +201,33 @@ app.Run();
 /// can target this top-level Program from the E2E test project.
 /// </summary>
 public partial class Program { }
+
+/// <summary>
+/// Registers every built-in <see cref="LordHelm.Orchestrator.Overseers.IOverseerAgent"/>
+/// with the <see cref="LordHelm.Orchestrator.Overseers.OverseerRegistry"/> before the
+/// runner starts sweeping. Runs once at startup.
+/// </summary>
+public sealed class OverseerBootstrapHostedService : IHostedService
+{
+    private readonly LordHelm.Orchestrator.Overseers.OverseerRegistry _registry;
+    private readonly LordHelm.Orchestrator.Overseers.DocumentCuratorAgent _documentCurator;
+
+    public OverseerBootstrapHostedService(
+        LordHelm.Orchestrator.Overseers.OverseerRegistry registry,
+        LordHelm.Orchestrator.Overseers.DocumentCuratorAgent documentCurator)
+    {
+        _registry = registry;
+        _documentCurator = documentCurator;
+    }
+
+    public Task StartAsync(CancellationToken ct)
+    {
+        _registry.Register(_documentCurator, enabledByDefault: true);
+        return Task.CompletedTask;
+    }
+
+    public Task StopAsync(CancellationToken ct) => Task.CompletedTask;
+}
 
 /// <summary>
 /// One-shot hosted service that runs on startup: scans the skills/ directory and

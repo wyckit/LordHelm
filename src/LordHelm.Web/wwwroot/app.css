@@ -174,6 +174,50 @@ html, body {
 .widget-card.needs-attention {
     box-shadow: 0 0 0 1px rgba(255,87,87,0.3), 0 0 12px rgba(232,163,61,0.2);
 }
+
+/* -------------------------------- alerts + overseers -------------------------------- */
+
+.alerts-link { position: relative; }
+.alert-badge {
+    display: inline-block; min-width: 16px; padding: 0 5px; margin-left: 4px;
+    background: var(--incident-1); color: var(--bg);
+    border-radius: 8px; font-size: 10px; font-weight: bold; line-height: 16px;
+    text-align: center;
+}
+
+.alerts-list { display: flex; flex-direction: column; gap: 8px; }
+.alert-card {
+    padding: 10px 14px; border: 1px solid var(--panel-edge); border-left-width: 4px;
+    background: var(--panel); cursor: pointer; transition: transform 60ms ease, border-color 120ms ease;
+}
+.alert-card:hover { transform: translateY(-1px); }
+.alert-card.unread { background: rgba(232, 163, 61, 0.05); }
+.alert-card.read { opacity: 0.6; }
+.alert-card.alert-info       { border-left-color: var(--sandbox-1); }
+.alert-card.alert-warning    { border-left-color: var(--host); }
+.alert-card.alert-attention  { border-left-color: var(--incident-2); }
+.alert-card.alert-doneforno  { border-left-color: var(--sandbox-2); }
+.alert-card.alert-donefornow { border-left-color: var(--sandbox-2); }
+.alert-card.alert-error      { border-left-color: var(--incident-1); }
+.alert-head {
+    display: flex; gap: 12px; font-size: 10px; text-transform: uppercase; letter-spacing: 1px;
+    color: var(--muted); margin-bottom: 4px;
+}
+.alert-head .alert-kind { color: var(--host); font-weight: bold; }
+.alert-head .alert-source { color: var(--sandbox-1); }
+.alert-head .alert-time { margin-left: auto; }
+.alert-title { font-size: 13px; font-weight: bold; margin-bottom: 4px; }
+.alert-body { font-size: 11px; color: var(--fg); white-space: pre-wrap; margin: 0;
+              font-family: ui-monospace, Consolas, monospace; background: transparent; padding: 0; }
+
+.btn-toggle, .btn-bump {
+    background: transparent; color: var(--fg); border: 1px solid var(--panel-edge);
+    padding: 4px 10px; font-family: inherit; font-size: 10px; cursor: pointer; margin-right: 4px;
+    text-transform: uppercase; letter-spacing: 1px;
+}
+.btn-toggle:hover { border-color: var(--sandbox-2); color: var(--sandbox-2); }
+.btn-bump:hover   { border-color: var(--host); color: var(--host); }
+tr.agent-off { opacity: 0.6; }
 .goal-bar button {
     background: transparent; color: var(--host); border: 1px solid var(--host);
     padding: 6px 14px; font-family: inherit; font-size: 12px; cursor: pointer;

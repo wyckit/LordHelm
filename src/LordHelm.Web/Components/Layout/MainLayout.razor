@@ -1,13 +1,23 @@
 @inherits LayoutComponentBase
+@implements IDisposable
+@inject LordHelm.Core.IAlertTray Tray
 
 <nav class="helm-nav">
     <a href="/" class="brand">LORD HELM</a>
     <a href="/">dashboard</a>
     <a href="/skills">skills</a>
     <a href="/experts">experts</a>
+    <a href="/overseers">overseers</a>
     <a href="/providers">providers</a>
     <a href="/models">models</a>
     <a href="/widgets">widgets</a>
+    <a href="/alerts" class="alerts-link">
+        alerts
+        @if (unread > 0)
+        {
+            <span class="alert-badge">@unread</span>
+        }
+    </a>
 </nav>
 
 @Body
@@ -17,3 +27,21 @@
     <a href="." class="reload">Reload</a>
     <span class="dismiss">&#x1F5D9;</span>
 </div>
+
+@code {
+    private int unread;
+
+    protected override void OnInitialized()
+    {
+        unread = Tray.UnreadCount;
+        Tray.OnChanged += HandleChanged;
+    }
+
+    private void HandleChanged()
+    {
+        unread = Tray.UnreadCount;
+        InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose() => Tray.OnChanged -= HandleChanged;
+}

@@ -1,0 +1,97 @@
+@page "/overseers"
+@rendermode InteractiveServer
+@implements IDisposable
+@inject LordHelm.Orchestrator.Overseers.OverseerRegistry Registry
+
+<PageTitle>Lord Helm — Overseers</PageTitle>
+
+<header class="helm-header">
+    <h1>Overseers <span class="subtitle">@Registry.Agents.Count agent(s) registered</span></h1>
+</header>
+
+<section class="mgmt-body">
+    <p class="muted">
+        Overseer agents run on their own cadence, pushing alerts when they notice
+        something that needs attention. Toggle an agent off to pause it; click
+        <code>bump</code> to force an immediate tick (for a cold-cache agent that's
+        been idle for a while).
+    </p>
+
+    @if (agents.Count == 0)
+    {
+        <div class="empty-panel">No overseer agents registered.</div>
+    }
+    else
+    {
+        <table class="mgmt-table">
+            <thead>
+                <tr><th>Agent</th><th>Status</th><th>Last tick</th><th>Next tick</th><th>Ticks</th><th>Last message</th><th></th></tr>
+            </thead>
+            <tbody>
+            @foreach (var agent in agents)
+            {
+                var state = Registry.Get(agent.Id);
+                <tr class="agent-@(state?.Enabled == true ? "on" : "off")">
+                    <td>
+                        <strong>@agent.Name</strong>
+                        <div class="muted" style="font-size:11px">@agent.Description</div>
+                    </td>
+                    <td>
+                        <span class="pill tier-@(StatusTone(state))">@(state?.LastStatus.ToString() ?? "new")</span>
+                    </td>
+                    <td class="mono">@(state?.LastTickAt?.ToLocalTime().ToString("HH:mm:ss") ?? "—")</td>
+                    <td class="mono">@(state is null ? "—" : Relative(state.NextTickAt))</td>
+                    <td>@(state?.TickCount ?? 0)</td>
+                    <td class="muted">@(state?.LastMessage ?? "")</td>
+                    <td>
+                        <button class="btn-toggle" @onclick="() => Toggle(agent.Id, state?.Enabled != true)">
+                            @(state?.Enabled == true ? "pause" : "enable")
+                        </button>
+                        <button class="btn-bump" @onclick="() => Bump(agent.Id)">bump</button>
+                    </td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    }
+</section>
+
+@code {
+    private IReadOnlyList<LordHelm.Orchestrator.Overseers.IOverseerAgent> agents = Array.Empty<LordHelm.Orchestrator.Overseers.IOverseerAgent>();
+
+    protected override void OnInitialized()
+    {
+        agents = Registry.Agents;
+        Registry.OnChanged += HandleChanged;
+    }
+
+    private void HandleChanged()
+    {
+        agents = Registry.Agents;
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void Toggle(string id, bool enable) => Registry.SetEnabled(id, enable);
+    private void Bump(string id) => Registry.Bump(id);
+
+    private static string StatusTone(LordHelm.Orchestrator.Overseers.OverseerState? s) => s?.LastStatus switch
+    {
+        LordHelm.Orchestrator.Overseers.OverseerStatus.Working => "deep",
+        LordHelm.Orchestrator.Overseers.OverseerStatus.WaitingForAttention => "code",
+        LordHelm.Orchestrator.Overseers.OverseerStatus.DoneForNow => "fast",
+        LordHelm.Orchestrator.Overseers.OverseerStatus.Error => "deep",
+        _ => "deep",
+    };
+
+    private static string Relative(DateTimeOffset at)
+    {
+        var delta = at - DateTimeOffset.UtcNow;
+        if (delta.TotalSeconds < 0) return "due now";
+        if (delta.TotalSeconds < 60) return $"{(int)delta.TotalSeconds}s";
+        if (delta.TotalMinutes < 60) return $"{(int)delta.TotalMinutes}m";
+        if (delta.TotalHours < 24) return $"{(int)delta.TotalHours}h";
+        return "paused";
+    }
+
+    public void Dispose() => Registry.OnChanged -= HandleChanged;
+}

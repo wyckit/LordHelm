@@ -1,0 +1,61 @@
+@page "/alerts"
+@rendermode InteractiveServer
+@implements IDisposable
+@inject LordHelm.Core.IAlertTray Tray
+
+<PageTitle>Lord Helm — Alerts (@Tray.UnreadCount)</PageTitle>
+
+<header class="helm-header">
+    <h1>Alerts <span class="subtitle">@Tray.UnreadCount unread of @all.Count total</span></h1>
+    <div class="helm-toolbar">
+        <button @onclick="MarkAllRead" title="Mark every alert as read">mark all read</button>
+        <button @onclick="Clear" title="Purge the tray">clear</button>
+    </div>
+</header>
+
+<section class="mgmt-body">
+    @if (all.Count == 0)
+    {
+        <div class="empty-panel">No alerts yet. Overseer agents and incident responses surface here.</div>
+    }
+    else
+    {
+        <div class="alerts-list">
+        @foreach (var a in all)
+        {
+            <div class="alert-card alert-@a.Kind.ToString().ToLowerInvariant() @(a.Read ? "read" : "unread")"
+                 @onclick="() => MarkRead(a.Id)">
+                <div class="alert-head">
+                    <span class="alert-kind">@a.Kind</span>
+                    <span class="alert-source">@a.Source</span>
+                    <span class="alert-time">@a.At.ToLocalTime().ToString("HH:mm:ss")</span>
+                </div>
+                <div class="alert-title">@a.Title</div>
+                <pre class="alert-body">@a.Body</pre>
+            </div>
+        }
+        </div>
+    }
+</section>
+
+@code {
+    private IReadOnlyList<LordHelm.Core.AlertEntry> all = Array.Empty<LordHelm.Core.AlertEntry>();
+
+    protected override void OnInitialized()
+    {
+        all = Tray.All();
+        Tray.OnChanged += HandleChanged;
+    }
+
+    private void HandleChanged()
+    {
+        all = Tray.All();
+        InvokeAsync(StateHasChanged);
+    }
+
+    private async Task MarkRead(string id) => await Tray.MarkReadAsync(id);
+    private async Task MarkAllRead() => await Tray.MarkAllReadAsync();
+    private async Task Clear() => await Tray.ClearAsync();
+
+    public void Dispose() => Tray.OnChanged -= HandleChanged;
+}
