@@ -22,30 +22,41 @@ public sealed record McpToolEntry(
 /// vendor-agnostic; <see cref="Resolve"/> picks the best concrete <see cref="ModelId"/>
 /// available at invocation time.
 ///
-/// Council-resolved design (2026-04-21): hardcode baseline catalogue at build
-/// time, background-probe availability at startup + periodically, never probe on
-/// demand. Storage lifecycle mirrors CliSpec (STM → LTM after 3 stable probes).
+/// Entries are mutable from within Lord Helm: operators can add, edit, and remove
+/// models through the <c>/models/new</c> page. A <see cref="OnChanged"/> event fires
+/// on every mutation so the UI can re-render without polling, and a persistence layer
+/// (<see cref="IModelCatalogStore"/>) serialises the catalog to disk so changes
+/// survive a restart.
 /// </summary>
 public interface IModelCatalog
 {
+    event Action? OnChanged;
+
     IReadOnlyList<ModelEntry> GetModels(string? vendorId = null);
 
-    /// <summary>
-    /// Pick the best available <see cref="ModelEntry"/> for a tier, optionally
-    /// biased by vendor. Returns null when no available model matches.
-    /// </summary>
+    /// <summary>Pick the best available model for a tier, optionally biased by vendor.</summary>
     ModelEntry? Resolve(ModelTier tier, string? preferredVendor = null);
 
     IReadOnlyList<McpToolEntry> GetMcpTools(string? serverName = null);
 
+    IReadOnlyList<string> Vendors();
+
+    void Upsert(ModelEntry entry);
+    bool Remove(string vendorId, string modelId);
     void MarkAvailability(string vendorId, string modelId, bool available);
     void RegisterMcpTool(McpToolEntry tool);
+    bool RemoveMcpTool(string serverName, string toolName);
+
+    /// <summary>Replace the full catalog (used by the persistence loader at startup).</summary>
+    void ReplaceAll(IEnumerable<ModelEntry> entries, IEnumerable<McpToolEntry> tools);
 }
 
 public sealed class ModelCatalog : IModelCatalog
 {
     private readonly System.Collections.Concurrent.ConcurrentDictionary<(string vendor, string model), ModelEntry> _models;
     private readonly System.Collections.Concurrent.ConcurrentDictionary<(string server, string tool), McpToolEntry> _tools;
+
+    public event Action? OnChanged;
 
     public ModelCatalog(IEnumerable<ModelEntry>? seed = null)
     {
@@ -82,16 +93,54 @@ public sealed class ModelCatalog : IModelCatalog
         .OrderBy(t => t.ServerName).ThenBy(t => t.ToolName)
         .ToList();
 
+    public IReadOnlyList<string> Vendors() =>
+        _models.Values.Select(m => m.VendorId)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(v => v, StringComparer.Ordinal).ToList();
+
+    public void Upsert(ModelEntry entry)
+    {
+        _models[(entry.VendorId, entry.ModelId)] = entry;
+        OnChanged?.Invoke();
+    }
+
+    public bool Remove(string vendorId, string modelId)
+    {
+        var removed = _models.TryRemove((vendorId, modelId), out _);
+        if (removed) OnChanged?.Invoke();
+        return removed;
+    }
+
     public void MarkAvailability(string vendorId, string modelId, bool available)
     {
         var key = (vendorId, modelId);
         _models.AddOrUpdate(key,
             _ => new ModelEntry(vendorId, modelId, ModelTier.Deep, "", available, DateTimeOffset.UtcNow),
             (_, existing) => existing with { IsAvailable = available, LastProbed = DateTimeOffset.UtcNow });
+        OnChanged?.Invoke();
     }
 
-    public void RegisterMcpTool(McpToolEntry tool) =>
+    public void RegisterMcpTool(McpToolEntry tool)
+    {
         _tools[(tool.ServerName, tool.ToolName)] = tool;
+        OnChanged?.Invoke();
+    }
+
+    public bool RemoveMcpTool(string serverName, string toolName)
+    {
+        var removed = _tools.TryRemove((serverName, toolName), out _);
+        if (removed) OnChanged?.Invoke();
+        return removed;
+    }
+
+    public void ReplaceAll(IEnumerable<ModelEntry> entries, IEnumerable<McpToolEntry> tools)
+    {
+        _models.Clear();
+        foreach (var e in entries) _models[(e.VendorId, e.ModelId)] = e;
+        _tools.Clear();
+        foreach (var t in tools) _tools[(t.ServerName, t.ToolName)] = t;
+        OnChanged?.Invoke();
+    }
 
     public static IReadOnlyList<ModelEntry> DefaultSeed()
     {

@@ -478,3 +478,20 @@ tr.agent-off { opacity: 0.6; }
 .new-skill-grid .skill-xml:focus { outline: none; border-color: var(--host); }
 .new-skill-grid .skill-status { font-size: 12px; color: var(--fg); }
 .new-skill-grid .skill-status p { margin-top: 10px; }
+
+.new-model-form {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; margin-top: 12px; max-width: 900px;
+}
+.new-model-form label {
+    display: flex; flex-direction: column; gap: 4px; font-size: 10px;
+    color: var(--muted); text-transform: uppercase; letter-spacing: 1px;
+}
+.new-model-form label.full { grid-column: 1 / -1; }
+.new-model-form input[type=text], .new-model-form select {
+    background: var(--panel); color: var(--fg);
+    border: 1px solid var(--panel-edge); border-radius: 2px;
+    padding: 6px 10px; font-family: inherit; font-size: 12px;
+}
+.new-model-form input[type=text]:focus, .new-model-form select:focus {
+    outline: none; border-color: var(--host);
+}

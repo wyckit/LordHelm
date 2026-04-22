@@ -1,22 +1,25 @@
 @page "/models"
 @rendermode InteractiveServer
+@implements IDisposable
 @inject LordHelm.Orchestrator.IModelCatalog Catalog
+@inject NavigationManager Nav
 
 <PageTitle>Lord Helm — Models</PageTitle>
 
 <header class="helm-header">
     <h1>Models <span class="subtitle">@models.Count available across @vendors.Count vendors</span></h1>
     <div class="helm-toolbar">
+        <a href="/models/new" class="run-skill" style="text-decoration:none;padding:4px 12px">+ add model</a>
         <select @bind="compareTierStr" title="Baseline tier for cost delta">
             <option value="Deep">deep</option>
             <option value="Fast">fast</option>
             <option value="Code">code</option>
         </select>
         <select @bind="compareVendor" title="Baseline vendor">
-            <option value="">claude</option>
-            <option value="claude">claude</option>
-            <option value="gemini">gemini</option>
-            <option value="codex">codex</option>
+            @foreach (var v in vendorList)
+            {
+                <option value="@v">@v</option>
+            }
         </select>
     </div>
 </header>
@@ -25,8 +28,8 @@
     <p class="muted">
         Tier-based model selection. The decomposer and operators request a tier
         (<code>fast</code> / <code>deep</code> / <code>code</code>); the catalog picks the best
-        concrete model available. The <strong>delta</strong> column shows each model's relative
-        cost vs. the baseline you pick above (placeholder until a price feed is plumbed in).
+        concrete model available. Catalog state persists to <code>data/models.json</code>;
+        <strong>add</strong>, <strong>toggle availability</strong>, or <strong>remove</strong> inline.
     </p>
 
     <h2>Available models</h2>
@@ -44,7 +47,11 @@
                 <td><strong>@m.VendorId</strong></td>
                 <td class="mono">@m.ModelId</td>
                 <td><span class="pill tier-@m.Tier.ToString().ToLowerInvariant()">@m.Tier</span></td>
-                <td>@(m.IsAvailable ? "available" : "unreachable")</td>
+                <td>
+                    <button class="btn-toggle" @onclick="() => ToggleAvail(m)">
+                        @(m.IsAvailable ? "available" : "unreachable")
+                    </button>
+                </td>
                 <td class="cost-delta @(delta.Sign)">@delta.Label</td>
                 <td class="muted">@m.Description</td>
                 <td>
@@ -52,6 +59,7 @@
                     {
                         <button class="set-default" @onclick="() => SetBaseline(m)">set baseline</button>
                     }
+                    <button class="btn-bump" @onclick="() => Remove(m)" title="Remove from catalog">remove</button>
                 </td>
             </tr>
         }
@@ -69,11 +77,16 @@
     {
         <h2>MCP tools registered</h2>
         <table class="mgmt-table">
-            <thead><tr><th>Server</th><th>Tool</th><th>Description</th></tr></thead>
+            <thead><tr><th>Server</th><th>Tool</th><th>Description</th><th></th></tr></thead>
             <tbody>
             @foreach (var t in mcpTools)
             {
-                <tr><td><strong>@t.ServerName</strong></td><td class="mono">@t.ToolName</td><td>@t.Description</td></tr>
+                <tr>
+                    <td><strong>@t.ServerName</strong></td>
+                    <td class="mono">@t.ToolName</td>
+                    <td>@t.Description</td>
+                    <td><button class="btn-bump" @onclick="() => RemoveMcp(t)">remove</button></td>
+                </tr>
             }
             </tbody>
         </table>
@@ -83,16 +96,41 @@
 @code {
     private IReadOnlyList<LordHelm.Orchestrator.ModelEntry> models = Array.Empty<LordHelm.Orchestrator.ModelEntry>();
     private HashSet<string> vendors = new();
+    private IReadOnlyList<string> vendorList = Array.Empty<string>();
     private IReadOnlyList<LordHelm.Orchestrator.McpToolEntry> mcpTools = Array.Empty<LordHelm.Orchestrator.McpToolEntry>();
     private string compareTierStr = "Deep";
     private string compareVendor = "claude";
 
     protected override void OnInitialized()
     {
+        Refresh();
+        Catalog.OnChanged += HandleChanged;
+    }
+
+    private void HandleChanged()
+    {
+        Refresh();
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void Refresh()
+    {
         models = Catalog.GetModels();
         vendors = models.Select(m => m.VendorId).ToHashSet();
+        vendorList = Catalog.Vendors();
         mcpTools = Catalog.GetMcpTools();
+        if (!vendorList.Contains(compareVendor, StringComparer.OrdinalIgnoreCase) && vendorList.Count > 0)
+            compareVendor = vendorList[0];
     }
+
+    private void ToggleAvail(LordHelm.Orchestrator.ModelEntry m) =>
+        Catalog.MarkAvailability(m.VendorId, m.ModelId, !m.IsAvailable);
+
+    private void Remove(LordHelm.Orchestrator.ModelEntry m) =>
+        Catalog.Remove(m.VendorId, m.ModelId);
+
+    private void RemoveMcp(LordHelm.Orchestrator.McpToolEntry t) =>
+        Catalog.RemoveMcpTool(t.ServerName, t.ToolName);
 
     private string? Baseline() => string.IsNullOrEmpty(compareVendor) ? null : compareVendor;
 
@@ -104,9 +142,6 @@
 
     private (string Label, string Sign) EstimateDelta(LordHelm.Orchestrator.ModelEntry m)
     {
-        // Placeholder: until we plumb a real price feed we score by tier (deep = 1x, fast = 0.1x,
-        // code = 0.3x) relative to the baseline tier. Keeps the column honest (operators can see
-        // "this is cheaper") without inventing dollar amounts.
         static double Cost(LordHelm.Orchestrator.ModelTier t) => t switch
         {
             LordHelm.Orchestrator.ModelTier.Deep => 1.0,
@@ -122,4 +157,6 @@
         var pct = (int)Math.Round(Math.Abs(1 - rel) * 100);
         return (rel < 1 ? $"-{pct}%" : $"+{pct}%", sign);
     }
+
+    public void Dispose() => Catalog.OnChanged -= HandleChanged;
 }

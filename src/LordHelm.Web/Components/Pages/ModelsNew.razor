@@ -1,0 +1,99 @@
+@page "/models/new"
+@rendermode InteractiveServer
+@inject LordHelm.Orchestrator.IModelCatalog Catalog
+@inject NavigationManager Nav
+
+<PageTitle>Lord Helm — Add Model</PageTitle>
+
+<header class="helm-header">
+    <h1>Add model <span class="subtitle">extends the per-tier resolver without a rebuild</span></h1>
+    <div class="helm-toolbar">
+        <button @onclick="Save" disabled="@(!IsValid() || saving)">@(saving ? "saving..." : "save")</button>
+    </div>
+</header>
+
+<section class="mgmt-body">
+    <p class="muted">
+        A new model entry becomes available to <code>IModelCatalog.Resolve(tier, vendor)</code>
+        immediately — the dashboard tier dropdown, the <code>/api/goals</code> tier resolver,
+        and the decomposer's <code>"tier": "..."</code> hints all pick it up live. The catalog
+        is persisted to <code>data/models.json</code>, so edits survive restart.
+    </p>
+
+    <div class="new-model-form">
+        <label>Vendor
+            <input type="text" @bind="vendorId" placeholder="claude | gemini | codex | custom-id" />
+        </label>
+        <label>Model ID
+            <input type="text" @bind="modelId" placeholder="claude-haiku-4-6 | gemini-3-pro" />
+        </label>
+        <label>Tier
+            <select @bind="tierStr">
+                <option value="Fast">fast</option>
+                <option value="Deep">deep</option>
+                <option value="Code">code</option>
+            </select>
+        </label>
+        <label>Available
+            <select @bind="availableStr">
+                <option value="true">available</option>
+                <option value="false">unreachable</option>
+            </select>
+        </label>
+        <label class="full">Description
+            <input type="text" @bind="description" placeholder="one-line summary shown on the /models page" />
+        </label>
+    </div>
+
+    @if (!string.IsNullOrEmpty(lastError))
+    {
+        <div class="pill" style="border-color:var(--incident-1); color:var(--incident-1); margin-top:10px">@lastError</div>
+    }
+    @if (!string.IsNullOrEmpty(lastSuccess))
+    {
+        <div class="pill ok" style="margin-top:10px">@lastSuccess</div>
+    }
+</section>
+
+@code {
+    private string vendorId = string.Empty;
+    private string modelId = string.Empty;
+    private string tierStr = "Deep";
+    private string availableStr = "true";
+    private string description = string.Empty;
+    private string? lastError;
+    private string? lastSuccess;
+    private bool saving;
+
+    private bool IsValid() =>
+        !string.IsNullOrWhiteSpace(vendorId) &&
+        !string.IsNullOrWhiteSpace(modelId);
+
+    private async Task Save()
+    {
+        lastError = null; lastSuccess = null;
+        if (!IsValid())
+        {
+            lastError = "vendor and model id are required";
+            return;
+        }
+        saving = true; StateHasChanged();
+        try
+        {
+            if (!Enum.TryParse<LordHelm.Orchestrator.ModelTier>(tierStr, true, out var tier))
+                tier = LordHelm.Orchestrator.ModelTier.Deep;
+            var entry = new LordHelm.Orchestrator.ModelEntry(
+                VendorId: vendorId.Trim(),
+                ModelId: modelId.Trim(),
+                Tier: tier,
+                Description: description ?? string.Empty,
+                IsAvailable: string.Equals(availableStr, "true", StringComparison.OrdinalIgnoreCase),
+                LastProbed: DateTimeOffset.UtcNow);
+            Catalog.Upsert(entry);
+            await Task.Yield();
+            lastSuccess = $"saved {entry.VendorId}/{entry.ModelId}";
+            vendorId = modelId = description = string.Empty;
+        }
+        finally { saving = false; }
+    }
+}

@@ -149,6 +149,12 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<SseLogBroadcaster>
 // ---------------------------------------------------------------- orchestrator
 builder.Services.AddSingleton<LlmDecomposerOptions>();
 builder.Services.AddSingleton<IModelCatalog>(_ => new ModelCatalog());
+builder.Services.AddSingleton<IModelCatalogStore>(sp =>
+{
+    var path = Path.Combine(dataDir, "models.json");
+    return new JsonFileModelCatalogStore(path, sp.GetRequiredService<ILogger<JsonFileModelCatalogStore>>());
+});
+builder.Services.AddHostedService<ModelCatalogPersistenceHostedService>();
 builder.Services.AddSingleton<IGoalDecomposer, LlmGoalDecomposer>();
 builder.Services.AddSingleton<ExpertDirectory>(_ => ExpertDirectory.Default());
 var useLlmAggregator = string.Equals(builder.Configuration["LORDHELM_LLM_SWARM"]
