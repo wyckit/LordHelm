@@ -34,39 +34,54 @@ public sealed class SqliteCliSpecStore : ICliSpecStore
         }.ToString();
     }
 
+    private readonly SemaphoreSlim _initLock = new(1, 1);
+    private volatile bool _initialized;
+
     public async Task InitializeAsync(CancellationToken ct = default)
     {
-        await using var c = new SqliteConnection(_cs);
-        await c.OpenAsync(ct);
-        var cmd = c.CreateCommand();
-        cmd.CommandText = """
-            CREATE TABLE IF NOT EXISTS cli_specs (
-              vendor TEXT NOT NULL,
-              version TEXT NOT NULL,
-              flag_digest TEXT NOT NULL,
-              stability INTEGER NOT NULL,
-              lifecycle TEXT NOT NULL, -- 'stm' | 'ltm' | 'archived'
-              captured_at INTEGER NOT NULL,
-              spec_json TEXT NOT NULL,
-              PRIMARY KEY (vendor, version, flag_digest)
-            );
-            CREATE INDEX IF NOT EXISTS idx_cli_active ON cli_specs(vendor, lifecycle);
-            CREATE TABLE IF NOT EXISTS cli_mutations (
-              id INTEGER PRIMARY KEY AUTOINCREMENT,
-              vendor TEXT NOT NULL,
-              from_version TEXT NOT NULL,
-              to_version TEXT NOT NULL,
-              kind TEXT NOT NULL,
-              flag_name TEXT NOT NULL,
-              detail TEXT,
-              at INTEGER NOT NULL
-            );
-        """;
-        await cmd.ExecuteNonQueryAsync(ct);
+        if (_initialized) return;
+        await _initLock.WaitAsync(ct);
+        try
+        {
+            if (_initialized) return;
+            await using var c = new SqliteConnection(_cs);
+            await c.OpenAsync(ct);
+            var cmd = c.CreateCommand();
+            cmd.CommandText = """
+                CREATE TABLE IF NOT EXISTS cli_specs (
+                  vendor TEXT NOT NULL,
+                  version TEXT NOT NULL,
+                  flag_digest TEXT NOT NULL,
+                  stability INTEGER NOT NULL,
+                  lifecycle TEXT NOT NULL, -- 'stm' | 'ltm' | 'archived'
+                  captured_at INTEGER NOT NULL,
+                  spec_json TEXT NOT NULL,
+                  PRIMARY KEY (vendor, version, flag_digest)
+                );
+                CREATE INDEX IF NOT EXISTS idx_cli_active ON cli_specs(vendor, lifecycle);
+                CREATE TABLE IF NOT EXISTS cli_mutations (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  vendor TEXT NOT NULL,
+                  from_version TEXT NOT NULL,
+                  to_version TEXT NOT NULL,
+                  kind TEXT NOT NULL,
+                  flag_name TEXT NOT NULL,
+                  detail TEXT,
+                  at INTEGER NOT NULL
+                );
+            """;
+            await cmd.ExecuteNonQueryAsync(ct);
+            _initialized = true;
+        }
+        finally
+        {
+            _initLock.Release();
+        }
     }
 
     public async Task<IReadOnlyList<MutationEvent>> RecordAsync(CliSpec spec, int stabilityThreshold = 3, CancellationToken ct = default)
     {
+        await InitializeAsync(ct);
         await using var c = new SqliteConnection(_cs);
         await c.OpenAsync(ct);
         await using var tx = (SqliteTransaction)await c.BeginTransactionAsync(ct);
@@ -136,6 +151,7 @@ public sealed class SqliteCliSpecStore : ICliSpecStore
 
     public async Task<CliSpec?> GetActiveAsync(string vendorId, CancellationToken ct = default)
     {
+        await InitializeAsync(ct);
         await using var c = new SqliteConnection(_cs);
         await c.OpenAsync(ct);
         return await GetActiveInternal(c, null, vendorId, ct);
@@ -143,6 +159,7 @@ public sealed class SqliteCliSpecStore : ICliSpecStore
 
     public async Task<IReadOnlyList<MutationEvent>> RecentMutationsAsync(int limit = 50, CancellationToken ct = default)
     {
+        await InitializeAsync(ct);
         var list = new List<MutationEvent>();
         await using var c = new SqliteConnection(_cs);
         await c.OpenAsync(ct);

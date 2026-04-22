@@ -28,6 +28,8 @@ public interface IAuditLog
 public sealed class SqliteAuditLog : IAuditLog
 {
     private readonly string _cs;
+    private readonly SemaphoreSlim _initLock = new(1, 1);
+    private volatile bool _initialized;
 
     public SqliteAuditLog(string dbPath)
     {
@@ -41,28 +43,40 @@ public sealed class SqliteAuditLog : IAuditLog
 
     public async Task InitializeAsync(CancellationToken ct = default)
     {
-        await using var c = new SqliteConnection(_cs);
-        await c.OpenAsync(ct);
-        var cmd = c.CreateCommand();
-        cmd.CommandText = """
-            CREATE TABLE IF NOT EXISTS audit (
-              id INTEGER PRIMARY KEY AUTOINCREMENT,
-              prev_hash TEXT NOT NULL,
-              entry_hash TEXT NOT NULL UNIQUE,
-              skill_id TEXT NOT NULL,
-              risk_tier TEXT NOT NULL,
-              decision TEXT NOT NULL,
-              operator_id TEXT NOT NULL,
-              session_id TEXT NOT NULL,
-              detail TEXT,
-              at INTEGER NOT NULL
-            );
-        """;
-        await cmd.ExecuteNonQueryAsync(ct);
+        if (_initialized) return;
+        await _initLock.WaitAsync(ct);
+        try
+        {
+            if (_initialized) return;
+            await using var c = new SqliteConnection(_cs);
+            await c.OpenAsync(ct);
+            var cmd = c.CreateCommand();
+            cmd.CommandText = """
+                CREATE TABLE IF NOT EXISTS audit (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  prev_hash TEXT NOT NULL,
+                  entry_hash TEXT NOT NULL UNIQUE,
+                  skill_id TEXT NOT NULL,
+                  risk_tier TEXT NOT NULL,
+                  decision TEXT NOT NULL,
+                  operator_id TEXT NOT NULL,
+                  session_id TEXT NOT NULL,
+                  detail TEXT,
+                  at INTEGER NOT NULL
+                );
+            """;
+            await cmd.ExecuteNonQueryAsync(ct);
+            _initialized = true;
+        }
+        finally
+        {
+            _initLock.Release();
+        }
     }
 
     public async Task<AuditEntry> AppendAsync(string skillId, string riskTier, string decision, string operatorId, string sessionId, string? detail, CancellationToken ct = default)
     {
+        await InitializeAsync(ct);
         await using var c = new SqliteConnection(_cs);
         await c.OpenAsync(ct);
         await using var tx = (SqliteTransaction)await c.BeginTransactionAsync(ct);
@@ -100,6 +114,7 @@ public sealed class SqliteAuditLog : IAuditLog
 
     public async Task<bool> VerifyChainAsync(CancellationToken ct = default)
     {
+        await InitializeAsync(ct);
         await using var c = new SqliteConnection(_cs);
         await c.OpenAsync(ct);
         var cmd = c.CreateCommand();
@@ -132,6 +147,7 @@ public sealed class SqliteAuditLog : IAuditLog
 
     public async Task<IReadOnlyList<AuditEntry>> RecentAsync(int limit = 100, CancellationToken ct = default)
     {
+        await InitializeAsync(ct);
         var list = new List<AuditEntry>();
         await using var c = new SqliteConnection(_cs);
         await c.OpenAsync(ct);

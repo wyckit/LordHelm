@@ -18,6 +18,9 @@ public sealed class SqliteSkillCache : ISkillCache
 {
     private readonly string _connectionString;
 
+    private readonly SemaphoreSlim _initLock = new(1, 1);
+    private volatile bool _initialized;
+
     public SqliteSkillCache(string databasePath)
     {
         _connectionString = new SqliteConnectionStringBuilder
@@ -30,26 +33,38 @@ public sealed class SqliteSkillCache : ISkillCache
 
     public async Task InitializeAsync(CancellationToken ct = default)
     {
-        await using var conn = new SqliteConnection(_connectionString);
-        await conn.OpenAsync(ct);
-        var cmd = conn.CreateCommand();
-        cmd.CommandText = """
-            CREATE TABLE IF NOT EXISTS skills (
-              content_hash TEXT PRIMARY KEY,
-              skill_id TEXT NOT NULL,
-              version TEXT NOT NULL,
-              file_path TEXT NOT NULL,
-              loaded_at INTEGER NOT NULL,
-              manifest_json TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_skills_id ON skills(skill_id);
-            CREATE INDEX IF NOT EXISTS idx_skills_file ON skills(file_path);
-        """;
-        await cmd.ExecuteNonQueryAsync(ct);
+        if (_initialized) return;
+        await _initLock.WaitAsync(ct);
+        try
+        {
+            if (_initialized) return;
+            await using var conn = new SqliteConnection(_connectionString);
+            await conn.OpenAsync(ct);
+            var cmd = conn.CreateCommand();
+            cmd.CommandText = """
+                CREATE TABLE IF NOT EXISTS skills (
+                  content_hash TEXT PRIMARY KEY,
+                  skill_id TEXT NOT NULL,
+                  version TEXT NOT NULL,
+                  file_path TEXT NOT NULL,
+                  loaded_at INTEGER NOT NULL,
+                  manifest_json TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_skills_id ON skills(skill_id);
+                CREATE INDEX IF NOT EXISTS idx_skills_file ON skills(file_path);
+            """;
+            await cmd.ExecuteNonQueryAsync(ct);
+            _initialized = true;
+        }
+        finally
+        {
+            _initLock.Release();
+        }
     }
 
     public async Task<bool> HasHashAsync(string hash, CancellationToken ct = default)
     {
+        await InitializeAsync(ct);
         await using var conn = new SqliteConnection(_connectionString);
         await conn.OpenAsync(ct);
         var cmd = conn.CreateCommand();
@@ -61,6 +76,7 @@ public sealed class SqliteSkillCache : ISkillCache
 
     public async Task UpsertAsync(string filePath, SkillManifest manifest, CancellationToken ct = default)
     {
+        await InitializeAsync(ct);
         await using var conn = new SqliteConnection(_connectionString);
         await conn.OpenAsync(ct);
         await using var tx = (SqliteTransaction)await conn.BeginTransactionAsync(ct);
@@ -90,6 +106,7 @@ public sealed class SqliteSkillCache : ISkillCache
 
     public async Task<SkillManifest?> GetByIdAsync(string id, CancellationToken ct = default)
     {
+        await InitializeAsync(ct);
         await using var conn = new SqliteConnection(_connectionString);
         await conn.OpenAsync(ct);
         var cmd = conn.CreateCommand();
@@ -101,6 +118,7 @@ public sealed class SqliteSkillCache : ISkillCache
 
     public async Task<IReadOnlyList<SkillManifest>> ListAsync(CancellationToken ct = default)
     {
+        await InitializeAsync(ct);
         var list = new List<SkillManifest>();
         await using var conn = new SqliteConnection(_connectionString);
         await conn.OpenAsync(ct);
@@ -117,6 +135,7 @@ public sealed class SqliteSkillCache : ISkillCache
 
     public async Task RemoveByFilePathAsync(string filePath, CancellationToken ct = default)
     {
+        await InitializeAsync(ct);
         await using var conn = new SqliteConnection(_connectionString);
         await conn.OpenAsync(ct);
         var cmd = conn.CreateCommand();

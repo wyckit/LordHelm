@@ -15,7 +15,10 @@ public sealed class WidgetGoalProgressSink : IGoalProgressSink
     public Task OnGoalStartedAsync(string goalId, string goal, int plannedTaskCount, CancellationToken ct = default)
     {
         _state.StartTaskWidget(goalId, "goal", "goal: " + goal);
-        _state.AppendTaskLog(goalId, "goal", $"planned {plannedTaskCount} task(s)");
+        // plannedTaskCount is 0 here because decomposition happens inside the
+        // manager AFTER this callback fires. The real task count materialises
+        // as each sub-task widget spawns on the grid.
+        _state.AppendTaskLog(goalId, "goal", "dispatching...");
         return Task.CompletedTask;
     }
 
