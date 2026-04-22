@@ -1,4 +1,5 @@
 using LordHelm.Core;
+using LordHelm.Providers;
 using LordHelm.Skills;
 using Microsoft.Extensions.Logging;
 
@@ -36,6 +37,8 @@ public sealed class GoalRunner : IGoalRunner
     private readonly IExpertProvisioner _provisioner;
     private readonly ISkillCache _skills;
     private readonly ISynthesizer _synthesizer;
+    private readonly IProviderOrchestrator _providers;
+    private readonly ExpertDirectory _directory;
     private readonly IGoalProgressSink _sink;
     private readonly ILogger<GoalRunner> _logger;
 
@@ -44,6 +47,8 @@ public sealed class GoalRunner : IGoalRunner
         IExpertProvisioner provisioner,
         ISkillCache skills,
         ISynthesizer synthesizer,
+        IProviderOrchestrator providers,
+        ExpertDirectory directory,
         IGoalProgressSink sink,
         ILogger<GoalRunner> logger)
     {
@@ -51,6 +56,8 @@ public sealed class GoalRunner : IGoalRunner
         _provisioner = provisioner;
         _skills = skills;
         _synthesizer = synthesizer;
+        _providers = providers;
+        _directory = directory;
         _sink = sink;
         _logger = logger;
     }
@@ -83,37 +90,66 @@ public sealed class GoalRunner : IGoalRunner
                 await _sink.OnTaskStartedAsync(goalId, memberTaskId, memberLabel, innerCt);
                 try
                 {
-                    var skillId = node.Skill ?? PickSkill(node, skills);
-                    if (skillId is null)
+                    // Route priority:
+                    //  1. If the task carries an explicit skill id (decomposer asked for tool use)
+                    //     AND the skill exists in the cache, provision an Expert and execute via
+                    //     IExecutionRouter. This is the tool-call path.
+                    //  2. Otherwise — the much more common case — this is a pure-LLM task:
+                    //     call IProviderOrchestrator.GenerateAsync directly with the task goal
+                    //     as the prompt, optionally decorated with persona instructions.
+                    //     Skipping the transpiler here avoids invoking a CLI with zero args,
+                    //     which used to hang waiting for interactive input.
+                    var skillId = node.Skill;
+                    if (skillId is not null)
                     {
-                        var synthesisOutput = $"(synthesis) {node.Goal}";
-                        await _sink.OnTaskLogAsync(goalId, memberTaskId, "no skill match; synthesis step", innerCt);
-                        await _sink.OnTaskCompletedAsync(goalId, memberTaskId, true, synthesisOutput, innerCt);
-                        return synthesisOutput;
+                        var provReq = new ProvisionRequest(
+                            ExpertId: $"expert-{memberTaskId}",
+                            SkillId: skillId,
+                            CliVendorId: vendor,
+                            Model: defaultModel,
+                            Goal: node.Goal,
+                            Persona: node.Persona);
+                        var expert = await _provisioner.ProvisionAsync(provReq, innerCt);
+                        if (expert is null)
+                        {
+                            // Skill not loaded — fall through to LLM path rather than fail hard.
+                            await _sink.OnTaskLogAsync(goalId, memberTaskId,
+                                $"skill '{skillId}' not in cache; falling back to direct LLM call", innerCt);
+                        }
+                        else
+                        {
+                            await _sink.OnTaskLogAsync(goalId, memberTaskId,
+                                $"provisioned {expert.Profile.ExpertId} with skill '{skillId}' on {vendor}", innerCt);
+                            var toolOutput = await expert.Run(innerCt);
+                            await _sink.OnTaskLogAsync(goalId, memberTaskId, toolOutput, innerCt);
+                            await _sink.OnTaskCompletedAsync(goalId, memberTaskId, true, toolOutput, innerCt);
+                            return toolOutput;
+                        }
                     }
 
-                    var provReq = new ProvisionRequest(
-                        ExpertId: $"expert-{memberTaskId}",
-                        SkillId: skillId,
-                        CliVendorId: vendor,
-                        Model: defaultModel,
-                        Goal: node.Goal,
-                        Persona: node.Persona);
-                    var expert = await _provisioner.ProvisionAsync(provReq, innerCt);
-                    if (expert is null)
-                    {
-                        var msg = $"skill '{skillId}' not found";
-                        await _sink.OnTaskLogAsync(goalId, memberTaskId, msg, innerCt);
-                        await _sink.OnTaskCompletedAsync(goalId, memberTaskId, false, msg, innerCt);
-                        throw new InvalidOperationException(msg);
-                    }
-
+                    // Pure-LLM path: build the prompt and call the provider orchestrator.
+                    var prompt = BuildLlmPrompt(node, req.Goal);
                     await _sink.OnTaskLogAsync(goalId, memberTaskId,
-                        $"provisioned {expert.Profile.ExpertId} with skill '{skillId}' on {vendor}", innerCt);
-                    var output = await expert.Run(innerCt);
-                    await _sink.OnTaskLogAsync(goalId, memberTaskId, output, innerCt);
-                    await _sink.OnTaskCompletedAsync(goalId, memberTaskId, true, output, innerCt);
-                    return output;
+                        $"calling {vendor} ({defaultModel}) with {prompt.Length}-char prompt", innerCt);
+                    var resp = await _providers.GenerateWithFailoverAsync(
+                        preferredVendor: vendor,
+                        modelOverride: defaultModel,
+                        prompt: prompt,
+                        maxTokens: 1024,
+                        temperature: 0.2f,
+                        innerCt);
+                    if (resp.Error is not null)
+                    {
+                        var errMsg = $"provider error ({resp.Error.Code}): {resp.Error.Message}";
+                        await _sink.OnTaskLogAsync(goalId, memberTaskId, errMsg, innerCt);
+                        await _sink.OnTaskCompletedAsync(goalId, memberTaskId, false, errMsg, innerCt);
+                        throw new InvalidOperationException(errMsg);
+                    }
+                    var llmOutput = resp.AssistantMessage ?? string.Empty;
+                    await _sink.OnTaskLogAsync(goalId, memberTaskId,
+                        llmOutput.Length > 400 ? llmOutput.Substring(0, 400) + "..." : llmOutput, innerCt);
+                    await _sink.OnTaskCompletedAsync(goalId, memberTaskId, true, llmOutput, innerCt);
+                    return llmOutput;
                 }
                 catch (Exception ex)
                 {
@@ -160,6 +196,26 @@ public sealed class GoalRunner : IGoalRunner
             if (goalLower.Contains(s.Id.ToLowerInvariant())) return s.Id;
         }
         return null;
+    }
+
+    /// <summary>
+    /// Build the prompt that a pure-LLM task node should send to its chosen vendor.
+    /// When the task has a named persona, the persona's SystemHint prefixes the
+    /// prompt so the model responds in character. Otherwise the raw goal is used.
+    /// </summary>
+    internal string BuildLlmPrompt(TaskNode node, string originalGoal)
+    {
+        if (node.Persona is not null)
+        {
+            var persona = _directory.Get(node.Persona);
+            if (persona is not null)
+            {
+                return persona.SpawnInstructions(node.Goal);
+            }
+        }
+        // Fall back to the task goal — or the top-level user goal if the decomposer
+        // produced only a single trivial root node (common in passthrough mode).
+        return string.IsNullOrWhiteSpace(node.Goal) ? originalGoal : node.Goal;
     }
 
     private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max] + "...";

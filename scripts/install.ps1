@@ -54,7 +54,8 @@ param(
     [switch]$SkipTests,
     [switch]$SkipDockerPull,
     [string]$SandboxImage = 'python:3.12-slim',
-    [string]$EngramRepoUrl = 'https://github.com/wyckit/mcp-engram-memory.git'
+    [string]$EngramRepoUrl = 'https://github.com/wyckit/mcp-engram-memory.git',
+    [ValidateSet('docker','disabled')][string]$SandboxMode = 'docker'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -367,7 +368,12 @@ foreach ($dir in @('data','logs')) {
 }
 
 # ---------- Sandbox image pre-pull ----------
-if (-not $SkipDockerPull -and (Test-Command 'docker')) {
+if ($SandboxMode -eq 'disabled') {
+    Write-Step "Sandbox mode: disabled"
+    Write-Note "Skipping Docker image pre-pull. Set LORDHELM_SANDBOX_MODE=disabled when running LordHelm.Web"
+    Write-Note "  to route every task through the LLM path (no Docker daemon required)."
+}
+elseif (-not $SkipDockerPull -and (Test-Command 'docker')) {
     Write-Step "Pre-pulling sandbox image"
     Write-Note $SandboxImage
     & docker pull $SandboxImage 2>&1 | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }

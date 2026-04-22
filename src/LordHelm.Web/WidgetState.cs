@@ -15,7 +15,32 @@ public sealed record WidgetModel(
     string Status,
     DateTimeOffset UpdatedAt,
     IReadOnlyList<string>? Tail = null,
-    ApprovalGate.PendingApproval? PendingApproval = null);
+    ApprovalGate.PendingApproval? PendingApproval = null)
+{
+    /// <summary>
+    /// Attention classifier used by the dashboard to group widgets into
+    /// Incidents / Approvals / Running / Completed / Failed. Order is the
+    /// visual priority order on the page.
+    /// </summary>
+    public string BucketOf()
+    {
+        if (Kind == WidgetKind.Approval && PendingApproval is not null) return "Approval";
+        return Status switch
+        {
+            "incident" or "pending-approval" when Kind == WidgetKind.Incident => "Incident",
+            "incident" => "Incident",
+            "failed" or "denied" => "Failed",
+            "completed" or "approved" => "Completed",
+            _ => "Running",
+        };
+    }
+
+    /// <summary>
+    /// True when this widget needs operator eyes on it right now (incidents + pending approvals).
+    /// The dashboard adds a stronger visual treatment (pulse, accent color) for these.
+    /// </summary>
+    public bool NeedsAttention() => BucketOf() is "Incident" or "Approval";
+}
 
 /// <summary>
 /// Thread-safe view-model for the Blazor dashboard. Backend services push into here;

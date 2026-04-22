@@ -47,8 +47,8 @@ public class WidgetSseE2ETests : IClassFixture<WidgetSseE2ETests.Factory>
 
         var html = await client.GetStringAsync("/", cts.Token);
         Assert.Contains("Lord Helm", html);
-        Assert.Contains("grid-stack", html);
-        Assert.Contains("helm-root", html);
+        Assert.Contains("status-summary", html);
+        Assert.Contains("goal-bar", html);
     }
 
     [Fact]

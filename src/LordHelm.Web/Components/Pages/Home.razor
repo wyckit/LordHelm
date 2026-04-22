@@ -19,13 +19,14 @@
     </div>
     <div class="helm-toolbar">
         <button @onclick="AddDemoWidget" title="Spawn a simulated expert thread">+ spawn</button>
+        <button @onclick="ClearCompleted" title="Remove completed + failed widgets">clear done</button>
         <button @onclick="ResetLayout" title="Forget saved widget layout">reset layout</button>
     </div>
 </header>
 
 <div class="goal-bar">
     <form @onsubmit="SubmitGoal" @onsubmit:preventDefault>
-        <input type="text" @bind="goalText" @bind:event="oninput" placeholder="submit a goal — e.g. 'read C:/Software/LordHelm/README.md and summarise'" />
+        <input type="text" @bind="goalText" @bind:event="oninput" placeholder="submit a goal — e.g. 'summarise the README'" />
         <select @bind="selectedTier" title="Model tier">
             <option value="Deep">deep</option>
             <option value="Fast">fast</option>
@@ -48,48 +49,76 @@
     </div>
 </div>
 
-<div class="grid-stack" id="helm-root">
-    @foreach (var w in widgets)
+<div class="status-summary">
+    @foreach (var bucket in Buckets)
     {
-        <div class="grid-stack-item @CssFor(w)"
-             gs-id="@w.Id"
-             gs-w="@DefaultWidth(w)" gs-h="@DefaultHeight(w)"
-             gs-min-w="2" gs-min-h="2">
-            <div class="grid-stack-item-content">
-                <div class="widget-head">
-                    <span class="icon">@IconFor(w)</span>
-                    <span class="label">@w.Label</span>
-                    <span class="status">@w.Status</span>
-                    <button class="expand-btn" @onclick="() => Expand(w)" title="Expand log">[ ]</button>
-                </div>
-                <div class="widget-body">
-                    @if (w.Tail is { Count: > 0 })
-                    {
-                        <pre class="log">@RenderTail(w.Tail.TakeLast(10))</pre>
-                    }
-                    else
-                    {
-                        <div class="placeholder">waiting for output...</div>
-                    }
-                    @if (w.Kind == LordHelm.Web.WidgetKind.Approval && w.PendingApproval is not null)
-                    {
-                        <div class="approval-actions">
-                            <button class="approve" @onclick="() => Approve(w)">approve</button>
-                            <button class="deny" @onclick="() => Deny(w)">deny</button>
-                        </div>
-                    }
-                </div>
-                <div class="widget-foot">
-                    <span>@w.Env</span>
-                    <span>@w.UpdatedAt.ToLocalTime().ToString("HH:mm:ss")</span>
-                </div>
-            </div>
-        </div>
+        var isActive = _activeFilter == bucket.Key;
+        <button class="status-pill status-pill-@bucket.Key.ToLowerInvariant() @(isActive ? "active" : "")"
+                title="@bucket.Description"
+                @onclick="() => ToggleFilter(bucket.Key)">
+            <span class="pill-icon">@bucket.Icon</span>
+            <span class="pill-label">@bucket.Label</span>
+            <span class="pill-count">@Count(bucket.Key)</span>
+        </button>
+    }
+    @if (_activeFilter is not null)
+    {
+        <button class="status-pill clear-filter" @onclick="() => ToggleFilter(null)">clear filter</button>
     }
 </div>
+
+@foreach (var bucket in Buckets.Where(b => ShouldShow(b.Key)))
+{
+    var items = WidgetsIn(bucket.Key);
+    if (items.Count == 0) continue;
+
+    <section class="status-group status-group-@bucket.Key.ToLowerInvariant()">
+        <header class="group-head">
+            <span class="group-icon">@bucket.Icon</span>
+            <span class="group-label">@bucket.Label</span>
+            <span class="group-count">@items.Count</span>
+            <span class="group-blurb">@bucket.Description</span>
+        </header>
+        <div class="group-body">
+            @foreach (var w in items)
+            {
+                <div class="widget-card @CssFor(w) @(w.NeedsAttention() ? "needs-attention" : "")">
+                    <div class="widget-head">
+                        <span class="icon">@IconFor(w)</span>
+                        <span class="label" title="@w.Label">@w.Label</span>
+                        <span class="status">@w.Status</span>
+                        <button class="expand-btn" @onclick="() => Expand(w)" title="Expand log">[ ]</button>
+                    </div>
+                    <div class="widget-body">
+                        @if (w.Tail is { Count: > 0 })
+                        {
+                            <pre class="log">@RenderTail(w.Tail.TakeLast(10))</pre>
+                        }
+                        else
+                        {
+                            <div class="placeholder">waiting for output...</div>
+                        }
+                        @if (w.Kind == LordHelm.Web.WidgetKind.Approval && w.PendingApproval is not null)
+                        {
+                            <div class="approval-actions">
+                                <button class="approve" @onclick="() => Approve(w)">approve</button>
+                                <button class="deny" @onclick="() => Deny(w)">deny</button>
+                            </div>
+                        }
+                    </div>
+                    <div class="widget-foot">
+                        <span>@(w.Env?.ToString() ?? w.Kind.ToString())</span>
+                        <span>@w.UpdatedAt.ToLocalTime().ToString("HH:mm:ss")</span>
+                    </div>
+                </div>
+            }
+        </div>
+    </section>
+}
+
 @if (!widgets.Any())
 {
-    <div class="empty-overlay">No active threads. Click "+ spawn" to instantiate a demo widget.</div>
+    <div class="empty-overlay">No active threads. Submit a goal above or click "+ spawn".</div>
 }
 
 @if (expanded is not null)
@@ -113,7 +142,6 @@
     private IReadOnlyList<LordHelm.Web.WidgetModel> widgets = Array.Empty<LordHelm.Web.WidgetModel>();
     private LordHelm.Web.WidgetModel? expanded;
     private DotNetObjectReference<Home>? _selfRef;
-    private bool _gridInitialised;
     private int? _sseSubscription;
     private readonly List<string> liveLines = new();
     private const int LiveLinesCap = 400;
@@ -122,7 +150,43 @@
     private string? lastGoalStatus;
     private string selectedTier = "Deep";
     private string selectedVendor = string.Empty;
+    private string? _activeFilter;
 
+    // ---- status buckets: attention-ordered ----
+    private record Bucket(string Key, string Label, string Icon, string Description);
+
+    private static readonly IReadOnlyList<Bucket> Buckets = new Bucket[]
+    {
+        new("Incident",  "Incidents",  "!",       "paused threads awaiting Consensus Protocol"),
+        new("Approval",  "Approvals",  "[?]",     "host actions waiting for operator approve / deny"),
+        new("Running",   "Running",    "[>]",     "actively executing tasks and subprocesses"),
+        new("Completed", "Completed",  "[v]",     "tasks that finished successfully"),
+        new("Failed",    "Failed",     "[x]",     "tasks or subprocesses that exited non-zero"),
+    };
+
+    private bool ShouldShow(string key) => _activeFilter is null || _activeFilter == key;
+
+    private void ToggleFilter(string? key)
+    {
+        _activeFilter = _activeFilter == key ? null : key;
+    }
+
+    private int Count(string key) => WidgetsIn(key).Count;
+
+    private IReadOnlyList<LordHelm.Web.WidgetModel> WidgetsIn(string key)
+    {
+        return key switch
+        {
+            "Incident"  => widgets.Where(w => w.BucketOf() == "Incident").ToList(),
+            "Approval"  => widgets.Where(w => w.BucketOf() == "Approval").ToList(),
+            "Running"   => widgets.Where(w => w.BucketOf() == "Running").ToList(),
+            "Completed" => widgets.Where(w => w.BucketOf() == "Completed").ToList(),
+            "Failed"    => widgets.Where(w => w.BucketOf() == "Failed").ToList(),
+            _ => Array.Empty<LordHelm.Web.WidgetModel>(),
+        };
+    }
+
+    // ---- lifecycle ----
     private string? ResolveModelPreview()
     {
         if (!Enum.TryParse<LordHelm.Orchestrator.ModelTier>(selectedTier, true, out var tier))
@@ -142,20 +206,8 @@
         if (firstRender)
         {
             _selfRef = DotNetObjectReference.Create(this);
-            try
-            {
-                await JS.InvokeVoidAsync("helmGrid.init", "#helm-root", _selfRef);
-                _gridInitialised = true;
-            }
-            catch (JSException ex)
-            {
-                Console.Error.WriteLine($"gridstack init failed: {ex.Message}");
-            }
         }
-        else if (_gridInitialised)
-        {
-            try { await JS.InvokeVoidAsync("helmGrid.applyLayout"); } catch { }
-        }
+        await Task.CompletedTask;
     }
 
     [JSInvokable]
@@ -192,7 +244,15 @@
         State.SpawnDemo(id, label, env);
     }
 
-    private void ResetLayout() => _ = JS.InvokeVoidAsync("helmGrid.resetLayout");
+    private void ClearCompleted()
+    {
+        foreach (var w in widgets.Where(w => w.BucketOf() is "Completed" or "Failed").ToList())
+        {
+            State.Remove(w.Id);
+        }
+    }
+
+    private void ResetLayout() { /* grid layout no longer via gridstack; left as no-op */ }
 
     private async Task SubmitGoal()
     {
@@ -270,9 +330,6 @@
         => State.ResolveApproval(w.Id, approved: true, "operator approved via dashboard", ApprovalGate);
     private void Deny(LordHelm.Web.WidgetModel w)
         => State.ResolveApproval(w.Id, approved: false, "operator denied via dashboard", ApprovalGate);
-
-    private static int DefaultWidth(LordHelm.Web.WidgetModel w) => 4;
-    private static int DefaultHeight(LordHelm.Web.WidgetModel w) => 3;
 
     private static string CssFor(LordHelm.Web.WidgetModel w) => w.Kind switch
     {

@@ -90,6 +90,90 @@ html, body {
 .pill.tier-fast  { color: var(--sandbox-2); border-color: var(--sandbox-2); }
 .pill.tier-deep  { color: var(--host);      border-color: var(--host); }
 .pill.tier-code  { color: var(--sandbox-1); border-color: var(--sandbox-1); }
+
+/* -------------------------------- attention-grouped dashboard -------------------------------- */
+
+.status-summary {
+    display: flex; flex-wrap: wrap; gap: 8px;
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--panel-edge);
+    background: rgba(15, 22, 32, 0.5);
+    position: sticky; top: 94px; z-index: 9;
+}
+.status-pill {
+    background: var(--panel); color: var(--fg);
+    border: 1px solid var(--panel-edge);
+    padding: 6px 12px; font-family: inherit; font-size: 11px; cursor: pointer;
+    display: flex; align-items: center; gap: 8px;
+    letter-spacing: 1px;
+    transition: transform 60ms ease, border-color 120ms ease;
+}
+.status-pill:hover { transform: translateY(-1px); }
+.status-pill.active { background: var(--fg); color: var(--bg); }
+.status-pill .pill-icon { font-size: 13px; }
+.status-pill .pill-label { text-transform: uppercase; }
+.status-pill .pill-count {
+    font-weight: bold; padding: 1px 6px; border-radius: 8px;
+    background: rgba(255,255,255,0.08); font-size: 10px;
+}
+.status-pill.status-pill-incident   { border-color: var(--incident-1); color: var(--incident-1); }
+.status-pill.status-pill-incident.active { background: var(--incident-1); color: var(--bg); }
+.status-pill.status-pill-approval   { border-color: var(--host); color: var(--host); }
+.status-pill.status-pill-approval.active { background: var(--host); color: var(--bg); }
+.status-pill.status-pill-running    { border-color: var(--sandbox-1); color: var(--sandbox-1); }
+.status-pill.status-pill-running.active { background: var(--sandbox-1); color: var(--bg); }
+.status-pill.status-pill-completed  { border-color: var(--sandbox-2); color: var(--sandbox-2); }
+.status-pill.status-pill-completed.active { background: var(--sandbox-2); color: var(--bg); }
+.status-pill.status-pill-failed     { border-color: var(--incident-1); color: var(--muted); }
+.status-pill.status-pill-failed.active { background: var(--muted); color: var(--bg); }
+.status-pill.clear-filter { border-style: dashed; color: var(--muted); }
+
+.status-group {
+    padding: 10px 20px 18px;
+    border-bottom: 1px solid var(--panel-edge);
+}
+.status-group.status-group-incident { background: rgba(255, 87, 87, 0.06); }
+.status-group.status-group-approval { background: rgba(232, 163, 61, 0.06); }
+
+.group-head {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 8px;
+    font-size: 11px; letter-spacing: 2px; text-transform: uppercase;
+    padding-bottom: 4px; border-bottom: 1px solid var(--panel-edge);
+}
+.group-head .group-icon { font-size: 14px; }
+.group-head .group-label { font-weight: bold; color: var(--fg); }
+.group-head .group-count {
+    background: rgba(255,255,255,0.08); padding: 1px 8px; border-radius: 8px; font-size: 10px;
+}
+.group-head .group-blurb { color: var(--muted); font-size: 10px; text-transform: none; letter-spacing: 0.5px; }
+.status-group.status-group-incident .group-label { color: var(--incident-1); }
+.status-group.status-group-approval .group-label { color: var(--host); }
+.status-group.status-group-running  .group-label { color: var(--sandbox-1); }
+.status-group.status-group-completed .group-label { color: var(--sandbox-2); }
+.status-group.status-group-failed   .group-label { color: var(--muted); }
+
+.group-body {
+    display: grid; gap: 10px;
+    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+}
+
+.widget-card {
+    border: 2px solid var(--panel-edge); border-radius: 4px;
+    background: var(--panel);
+    display: flex; flex-direction: column; min-height: 180px;
+    overflow: hidden;
+    transition: transform 80ms ease;
+}
+.widget-card:hover { transform: translateY(-1px); }
+.widget-card.host     { border-color: var(--host); }
+.widget-card.sandbox  { border-color: var(--sandbox-2); border-style: dashed; animation: pulse-soft 2s infinite; }
+.widget-card.task     { border-color: var(--sandbox-1); border-style: dotted; }
+.widget-card.approval { border-color: var(--host); border-style: double; }
+.widget-card.incident { border-color: var(--incident-1); animation: pulse 1.2s infinite; }
+.widget-card.completed { border-color: var(--sandbox-2); opacity: 0.7; }
+.widget-card.needs-attention {
+    box-shadow: 0 0 0 1px rgba(255,87,87,0.3), 0 0 12px rgba(232,163,61,0.2);
+}
 .goal-bar button {
     background: transparent; color: var(--host); border: 1px solid var(--host);
     padding: 6px 14px; font-family: inherit; font-size: 12px; cursor: pointer;

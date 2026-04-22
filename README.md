@@ -90,6 +90,11 @@ dotnet run --project src/LordHelm.Host
 
 # Blazor command center UI (default ASP.NET port)
 dotnet run --project src/LordHelm.Web
+
+# Run without Docker — Docker-tier skills return a clean "sandbox disabled"
+# error instead of a connection timeout. Every other path (LLM tasks, Host
+# skills, goals, consensus) works exactly the same.
+LORDHELM_SANDBOX_MODE=disabled dotnet run --project src/LordHelm.Web
 ```
 
 ### Windows PowerShell scripts

@@ -82,7 +82,23 @@ builder.Services.AddSingleton<IAuditLog>(_ => new SqliteAuditLog(auditDbPath));
 builder.Services.AddSingleton<ApprovalGate>();
 builder.Services.AddSingleton<IApprovalGate>(sp => sp.GetRequiredService<ApprovalGate>());
 builder.Services.AddSingleton<IHostRunner, HostRunner>();
-builder.Services.AddSingleton<ISandboxRunner>(sp => DockerSandboxRunner.CreateDefault(sp.GetRequiredService<ILogger<DockerSandboxRunner>>()));
+
+// LORDHELM_SANDBOX_MODE: `docker` (default) or `disabled`. When disabled the
+// DisabledSandboxRunner returns a structured "sandbox disabled" error for any
+// Docker-tier skill. Host-tier skills remain untouched. No Docker daemon or
+// Docker.DotNet connection is required in disabled mode.
+var sandboxMode = (builder.Configuration["LORDHELM_SANDBOX_MODE"]
+    ?? Environment.GetEnvironmentVariable("LORDHELM_SANDBOX_MODE")
+    ?? "docker").Trim().ToLowerInvariant();
+if (sandboxMode is "disabled" or "off" or "none")
+{
+    builder.Services.AddSingleton<ISandboxRunner, DisabledSandboxRunner>();
+}
+else
+{
+    builder.Services.AddSingleton<ISandboxRunner>(sp =>
+        DockerSandboxRunner.CreateDefault(sp.GetRequiredService<ILogger<DockerSandboxRunner>>()));
+}
 builder.Services.AddSingleton<Func<SkillManifest, SandboxPolicy>>(_ => skill =>
     SandboxPolicy.Default("python:3.12-slim@sha256:0000000000000000000000000000000000000000000000000000000000000000"));
 builder.Services.AddSingleton<IExecutionRouter, ExecutionRouter>();
