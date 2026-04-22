@@ -62,7 +62,7 @@ LordHelm/
 | Claude CLI | On PATH (`claude --version` must succeed) |
 | Gemini CLI | Optional — required for cross-provider failover |
 | Codex CLI | Optional — required for 3-voter consensus panels |
-| `McpEngramMemory.Core` | Referenced via project reference to `../mcps/mcp-engram-memory` |
+| `McpEngramMemory.Core` | NuGet package [**0.8.1**](https://www.nuget.org/packages/McpEngramMemory.Core/0.8.1) — no sibling clone required |
 
 ---
 
@@ -113,7 +113,7 @@ For first-time setup and day-to-day launches:
 .\scripts\start.ps1 -HealthOnly
 ```
 
-`install.ps1` detects missing prerequisites (.NET SDK 9/10, Docker Desktop, Git, Node.js, the `claude` / `gemini` / `codex` CLIs, and the sibling `McpEngramMemory` repo) and offers a Yes/No prompt to install each one. Installers use `winget` for Windows packages, `git clone` for the engram repo, and `npm -g` for the provider CLIs.
+`install.ps1` detects missing prerequisites (.NET SDK 9/10, Docker Desktop, Git, Node.js, the `claude` / `gemini` / `codex` CLIs, and the `McpEngramMemory.Core` **dotnet global tool**) and offers a Yes/No prompt to install each one. Installers use `winget` for Windows packages, `dotnet tool install --global` for the engram server, and `npm -g` for the provider CLIs. Cloning the sibling `mcp-engram-memory` source repo is now optional — it's only needed when contributing to the engram server itself.
 
 ```powershell
 .\scripts\install.ps1               # interactive prompts per missing item
@@ -218,7 +218,7 @@ A skill is an XML file under `skills/` with the extension `.skill.xml`:
 
 ## Engram Integration
 
-Lord Helm references `McpEngramMemory.Core` as a project reference to the sibling `../mcps/mcp-engram-memory/` repository. Key namespaces used:
+Lord Helm references `McpEngramMemory.Core` **0.8.1** as a NuGet package (published at [nuget.org/packages/McpEngramMemory.Core/0.8.1](https://www.nuget.org/packages/McpEngramMemory.Core/0.8.1)). No sibling clone is required at build time. For the live MCP transport at runtime, install the server tool: `dotnet tool install --global McpEngramMemory.Core --version 0.8.1` and set `LORDHELM_ENGRAM_MCP=true`. Key namespaces used:
 
 | Namespace | Purpose |
 |---|---|
@@ -252,7 +252,7 @@ Lord Helm reuses the battle-tested CLI drivers from `McpEngramMemory.Core`:
 - `GeminiCliModelClient` — same shape
 - `CliExecutableResolver` — Windows PATHEXT and `.cmd`-shim resolution
 
-They live at `C:/Software/mcps/mcp-engram-memory/src/McpEngramMemory.Core/Services/Evaluation/`.
+They ship inside the `McpEngramMemory.Core` NuGet at `McpEngramMemory.Core.Services.Evaluation`. (Also available in source at `../mcps/mcp-engram-memory/src/McpEngramMemory.Core/Services/Evaluation/` when the sibling repo is cloned for engram-server development.)
 
 ---
 

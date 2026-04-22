@@ -6,10 +6,10 @@
     <ProjectReference Include="..\LordHelm.Execution\LordHelm.Execution.csproj" />
     <ProjectReference Include="..\LordHelm.Providers\LordHelm.Providers.csproj" />
     <ProjectReference Include="..\LordHelm.Monitor\LordHelm.Monitor.csproj" />
-    <ProjectReference Include="..\..\..\mcps\mcp-engram-memory\src\McpEngramMemory.Core\McpEngramMemory.Core.csproj" />
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="McpEngramMemory.Core" Version="0.8.1" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.5" />
     <PackageReference Include="ModelContextProtocol" Version="1.2.0" />
   </ItemGroup>

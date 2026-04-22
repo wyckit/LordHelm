@@ -8,15 +8,16 @@ namespace LordHelm.Orchestrator;
 
 public sealed record McpEngramOptions
 {
-    /// <summary>Executable that launches the mcp-engram-memory server (usually `node` or `dotnet`).</summary>
-    public string Command { get; init; } = "dotnet";
-    /// <summary>Arguments passed to the server. Default assumes local sibling repo.</summary>
-    public IReadOnlyList<string> Arguments { get; init; } = new[]
-    {
-        "run", "--project",
-        "../mcps/mcp-engram-memory/src/McpEngramMemory.Server/McpEngramMemory.Server.csproj",
-        "--no-build",
-    };
+    /// <summary>
+    /// Executable that launches the mcp-engram-memory server. Defaults to
+    /// <c>mcp-engram-memory</c> — the tool name shipped by the
+    /// <c>McpEngramMemory.Core</c> NuGet package (0.8.1+) when installed via
+    /// <c>dotnet tool install --global McpEngramMemory.Core</c>. Override to
+    /// <c>dotnet</c> + args for a local-repo run, or to a custom wrapper for
+    /// containerised deployments.
+    /// </summary>
+    public string Command { get; init; } = "mcp-engram-memory";
+    public IReadOnlyList<string> Arguments { get; init; } = Array.Empty<string>();
     public TimeSpan InitializeTimeout { get; init; } = TimeSpan.FromSeconds(30);
     public TimeSpan CallTimeout { get; init; } = TimeSpan.FromSeconds(20);
 }

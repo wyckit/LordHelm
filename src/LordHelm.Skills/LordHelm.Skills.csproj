@@ -2,7 +2,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\LordHelm.Core\LordHelm.Core.csproj" />
-    <ProjectReference Include="..\..\..\mcps\mcp-engram-memory\src\McpEngramMemory.Core\McpEngramMemory.Core.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -10,6 +9,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="McpEngramMemory.Core" Version="0.8.1" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.0" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.0" />
     <PackageReference Include="NJsonSchema" Version="11.0.2" />

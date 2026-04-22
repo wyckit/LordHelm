@@ -4,7 +4,7 @@
 
 .DESCRIPTION
     Verifies prerequisites (.NET SDK, Docker Desktop, Node.js + provider CLIs,
-    sibling McpEngramMemory repo), offers to install any that are missing via
+    McpEngramMemory global dotnet tool, optional sibling repo), offers to install any missing via
     winget / git / npm, restores NuGet packages, builds the solution, runs the
     test suite, creates local state directories, and pre-pulls the default
     sandbox image.
@@ -30,8 +30,10 @@
     Override the default sandbox image to pre-pull. Must be pinned by digest.
 
 .PARAMETER EngramRepoUrl
-    Git URL to clone the McpEngramMemory sibling repo from if not found
-    locally. Defaults to the public repository.
+    (Optional) Git URL to clone the McpEngramMemory sibling repo from if the
+    operator opts into source-mode instead of the NuGet package. Defaults to
+    the public repository. Only used when you decline the NuGet path at the
+    prompt.
 
 .EXAMPLE
     .\scripts\install.ps1                 # interactive prompts
@@ -198,9 +200,25 @@ function Install-EngramRepo {
     $target = Join-Path $parent 'mcps\mcp-engram-memory'
     $mcpsDir = Join-Path $parent 'mcps'
     if (-not (Test-Path $mcpsDir)) { New-Item -ItemType Directory -Path $mcpsDir | Out-Null }
-    Write-Note "Cloning $EngramRepoUrl -> $target"
+    Write-Note "Cloning $EngramRepoUrl -> $target (source-mode / for engram server contributions)"
     & git clone $EngramRepoUrl $target
     return ($LASTEXITCODE -eq 0)
+}
+
+function Install-EngramTool {
+    if (-not (Test-Command 'dotnet')) {
+        Write-Fail ".NET SDK required to install a dotnet tool."
+        return $false
+    }
+    Write-Note "Running: dotnet tool install --global McpEngramMemory.Core --version 0.8.1"
+    & dotnet tool install --global McpEngramMemory.Core --version 0.8.1 2>&1 | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
+    if ($LASTEXITCODE -eq 0) { Refresh-PathFromMachine; Write-Ok "McpEngramMemory.Core tool installed."; return $true }
+    # dotnet tool install returns non-zero if already installed; treat that as success.
+    if ((& dotnet tool list --global 2>$null) -match 'mcpengrammemory\.core') {
+        Write-Ok "McpEngramMemory.Core tool already installed."
+        return $true
+    }
+    return $false
 }
 
 # ---------- Check + install loop ----------
@@ -273,13 +291,23 @@ foreach ($cli in @('claude','gemini','codex')) {
     }
 }
 
-# McpEngramMemory sibling repo
+# McpEngramMemory: preferred path is the NuGet-backed dotnet global tool.
+# The sibling source repo is only needed if the operator is contributing to
+# the engram server itself — it's optional since LordHelm 0.2 (NuGet 0.8.1).
+$toolInstalled = $false
+if (Test-Command 'dotnet') {
+    $toolInstalled = ((& dotnet tool list --global 2>$null) -match 'mcpengrammemory\.core')
+}
+if ($toolInstalled) {
+    Write-Ok "McpEngramMemory.Core global tool installed"
+} else {
+    Write-Miss "McpEngramMemory.Core global tool not installed."
+    $needsInstall += @{ Name = 'McpEngramMemory.Core dotnet tool'; Installer = ${function:Install-EngramTool}; Critical = $false }
+}
+
 $engramProject = Join-Path (Split-Path -Parent $RepoRoot) 'mcps\mcp-engram-memory\src\McpEngramMemory.Core\McpEngramMemory.Core.csproj'
 if (Test-Path $engramProject) {
-    Write-Ok "McpEngramMemory.Core sibling project found"
-} else {
-    Write-Miss "McpEngramMemory.Core sibling repo not found."
-    $needsInstall += @{ Name = 'McpEngramMemory sibling repo'; Installer = ${function:Install-EngramRepo}; Critical = $true }
+    Write-Ok "McpEngramMemory sibling source repo detected (optional source-mode)"
 }
 
 # ---------- Offer installs ----------

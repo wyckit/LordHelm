@@ -2,10 +2,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\LordHelm.Core\LordHelm.Core.csproj" />
-    <ProjectReference Include="..\..\..\mcps\mcp-engram-memory\src\McpEngramMemory.Core\McpEngramMemory.Core.csproj" />
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="McpEngramMemory.Core" Version="0.8.1" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.0" />
   </ItemGroup>
 

@@ -3,11 +3,11 @@
   <ItemGroup>
     <ProjectReference Include="..\LordHelm.Core\LordHelm.Core.csproj" />
     <ProjectReference Include="..\LordHelm.Providers\LordHelm.Providers.csproj" />
-    <ProjectReference Include="..\..\..\mcps\mcp-engram-memory\src\McpEngramMemory.Core\McpEngramMemory.Core.csproj" />
     <ProjectReference Include="..\LordHelm.Monitor\LordHelm.Monitor.csproj" />
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="McpEngramMemory.Core" Version="0.8.1" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="9.0.0" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.0" />
   </ItemGroup>
