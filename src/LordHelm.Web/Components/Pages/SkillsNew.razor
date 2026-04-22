@@ -1,0 +1,114 @@
+@page "/skills/new"
+@rendermode InteractiveServer
+@inject LordHelm.Skills.ISkillAuthor Author
+@inject NavigationManager Nav
+
+<PageTitle>Lord Helm — New Skill</PageTitle>
+
+<header class="helm-header">
+    <h1>Create skill <span class="subtitle">validate → canonicalise → save → hot-reload</span></h1>
+    <div class="helm-toolbar">
+        <button @onclick="FillTemplate" title="Prefill with a minimal valid skeleton">load template</button>
+        <button @onclick="Save" disabled="@(saving || string.IsNullOrWhiteSpace(xml))">
+            @(saving ? "saving..." : "save")
+        </button>
+    </div>
+</header>
+
+<section class="mgmt-body">
+    <p class="muted">
+        Paste or edit a full <code>.skill.xml</code> manifest. Lord Helm runs the full two-stage
+        validator (XSD envelope + JSON Schema Draft 2020-12 for the parameter block), then writes
+        the file to <code>skills/&lt;Id&gt;.skill.xml</code>. The FileSystemWatcher picks it up
+        immediately; it appears in <a href="/skills">/skills</a> without a restart.
+    </p>
+
+    <div class="new-skill-grid">
+        <textarea class="skill-xml" spellcheck="false" @bind="xml" @bind:event="oninput"
+                  placeholder="paste skill xml here, or click 'load template'"></textarea>
+        <div class="skill-status">
+            @if (result is not null)
+            {
+                <div class="pill @(result.Succeeded ? "ok" : "")"
+                     style="border-color:@(result.Succeeded ? "var(--sandbox-2)" : "var(--incident-1)"); color:@(result.Succeeded ? "var(--sandbox-2)" : "var(--incident-1)")">
+                    @(result.Succeeded ? "saved" : "rejected")
+                </div>
+                @if (result.Succeeded && result.Manifest is not null)
+                {
+                    <p><strong>@result.Manifest.Id</strong> v@result.Manifest.Version<br/>
+                    hash: <code>@result.Manifest.ContentHashSha256.Substring(0,16)</code><br/>
+                    file: <code>@result.SavedPath</code></p>
+                    <button class="run-skill" @onclick="ViewList">view in /skills</button>
+                }
+                else
+                {
+                    <p class="muted">@result.ErrorDetail</p>
+                    @if (result.Validation.Errors.Count > 0)
+                    {
+                        <ul class="muted">
+                        @foreach (var e in result.Validation.Errors)
+                        {
+                            <li>[@e.Stage] line @e.LineNumber:@e.LinePosition — @e.Message</li>
+                        }
+                        </ul>
+                    }
+                    @if (result.Manifest is not null && result.SavedPath is not null && !result.Succeeded)
+                    {
+                        <div class="approval-actions">
+                            <button class="approve" @onclick="() => Save(overwrite: true)">overwrite existing</button>
+                        </div>
+                    }
+                }
+            }
+            else
+            {
+                <p class="muted">Submit the manifest to see validation results here.</p>
+            }
+        </div>
+    </div>
+</section>
+
+@code {
+    private string xml = string.Empty;
+    private LordHelm.Skills.SkillAuthoringResult? result;
+    private bool saving;
+
+    private void FillTemplate() => xml = BuildTemplate();
+
+    private static string BuildTemplate()
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("<?xml version=\"1.0\" encoding=\"utf-8\"?>");
+        sb.AppendLine("<Skill xmlns=\"https://lordhelm.dev/schemas/skill-manifest/v1\">");
+        sb.AppendLine("  <Id>my-skill</Id>");
+        sb.AppendLine("  <Version>0.1.0</Version>");
+        sb.AppendLine("  <ExecutionEnvironment>Host</ExecutionEnvironment>");
+        sb.AppendLine("  <RequiresApproval>false</RequiresApproval>");
+        sb.AppendLine("  <RiskTier>Read</RiskTier>");
+        sb.AppendLine("  <Timeout>PT30S</Timeout>");
+        sb.AppendLine("  <MinTrust>Low</MinTrust>");
+        sb.AppendLine("  <Description>Describe what this skill does.</Description>");
+        sb.AppendLine("  <Tags>");
+        sb.AppendLine("    <Tag>example</Tag>");
+        sb.AppendLine("  </Tags>");
+        sb.Append("  <ParameterSchema><![CDATA[");
+        sb.Append("{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"message\":{\"type\":\"string\",\"minLength\":1}},\"required\":[\"message\"],\"additionalProperties\":false}");
+        sb.AppendLine("]]></ParameterSchema>");
+        sb.AppendLine("</Skill>");
+        return sb.ToString();
+    }
+
+    private Task Save() => Save(overwrite: false);
+
+    private async Task Save(bool overwrite)
+    {
+        saving = true; StateHasChanged();
+        try
+        {
+            result = await Author.SaveAsync(xml, overwrite);
+        }
+        finally { saving = false; }
+    }
+
+    private void ViewList() => Nav.NavigateTo("/skills");
+}

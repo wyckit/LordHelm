@@ -41,8 +41,10 @@ public class LoaderTests : IDisposable
         var loader = NewLoader();
         var result = await loader.LoadDirectoryAsync(workingDir);
 
-        Assert.Equal(3, result.TotalFiles);
-        Assert.Equal(3, result.Loaded);
+        // Seed directory ships at least the three original skills; tests stay
+        // future-proof when new seed skills are added (e.g. execute-csharp).
+        Assert.True(result.TotalFiles >= 3, $"expected >=3 seed files, got {result.TotalFiles}");
+        Assert.Equal(result.TotalFiles, result.Loaded);
         Assert.Empty(result.Invalid);
     }
 

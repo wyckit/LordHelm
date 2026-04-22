@@ -293,3 +293,188 @@ tr.agent-off { opacity: 0.6; }
     0%, 100% { box-shadow: 0 0 0 0 rgba(63, 212, 138, 0.4); }
     50% { box-shadow: 0 0 6px 1px rgba(58, 160, 255, 0.5); }
 }
+
+/* -------------------------------- summary ribbon -------------------------------- */
+.summary-ribbon {
+    display: flex; align-items: center; gap: 10px;
+    padding: 6px 20px;
+    background: #060b12; border-bottom: 1px solid var(--panel-edge);
+    font-size: 11px; letter-spacing: 0.5px;
+    position: sticky; top: 32px; z-index: 9;
+}
+.summary-ribbon .ribbon-label {
+    color: var(--muted); text-transform: uppercase; letter-spacing: 2px;
+    font-size: 9px; margin-right: 6px;
+}
+.summary-ribbon .ribbon-vendor, .summary-ribbon .ribbon-chip {
+    padding: 3px 8px; border: 1px solid var(--panel-edge); border-radius: 2px;
+    display: inline-flex; align-items: center; gap: 6px;
+    text-decoration: none; color: var(--fg);
+}
+.summary-ribbon .ribbon-num {
+    color: var(--muted); font-size: 10px; font-weight: bold;
+    background: rgba(255,255,255,0.04); padding: 0 5px; border-radius: 6px;
+}
+.summary-ribbon .ribbon-vendor.ribbon-ok    { border-color: var(--sandbox-2); color: var(--sandbox-2); }
+.summary-ribbon .ribbon-vendor.ribbon-amber { border-color: var(--host); color: var(--host); }
+.summary-ribbon .ribbon-vendor.ribbon-warn  { border-color: var(--host); color: var(--host); animation: pulse-soft 2s infinite; }
+.summary-ribbon .ribbon-vendor.ribbon-err   { border-color: var(--incident-1); color: var(--incident-1); animation: pulse 1.5s infinite; }
+.summary-ribbon .ribbon-gap { flex: 1; }
+.summary-ribbon .ribbon-agents { border-color: var(--sandbox-1); color: var(--sandbox-1); }
+.summary-ribbon .ribbon-tasks  { border-color: var(--sandbox-2); color: var(--sandbox-2); }
+.summary-ribbon .ribbon-alerts { border-color: var(--panel-edge); color: var(--muted); }
+.summary-ribbon .ribbon-alerts.has-unread { border-color: var(--incident-1); color: var(--incident-1); animation: pulse 2s infinite; }
+
+/* -------------------------------- inline task redirect -------------------------------- */
+.task-redirect {
+    display: flex; gap: 4px; padding: 6px 10px;
+    background: #060b12; border-top: 1px solid var(--panel-edge);
+    font-size: 10px;
+}
+.task-redirect select {
+    background: transparent; color: var(--fg); border: 1px solid var(--panel-edge);
+    padding: 2px 4px; font-family: inherit; font-size: 10px;
+}
+.task-redirect button {
+    background: transparent; color: var(--host); border: 1px solid var(--host);
+    padding: 2px 8px; font-family: inherit; font-size: 10px; cursor: pointer;
+}
+.task-redirect button:hover { background: var(--host); color: var(--bg); }
+
+/* -------------------------------- overseer sparkline + recent -------------------------------- */
+.sparkline { display: inline-block; width: 60px; height: 14px; vertical-align: middle; }
+.sparkline rect { fill: var(--sandbox-1); }
+.recent-tail {
+    display: block; max-width: 300px; color: var(--muted); font-size: 10px;
+    font-family: ui-monospace, Consolas, monospace; white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis;
+}
+tr.agent-off { opacity: 0.6; }
+.btn-toggle, .btn-bump {
+    background: transparent; color: var(--fg); border: 1px solid var(--panel-edge);
+    padding: 4px 10px; font-family: inherit; font-size: 10px; cursor: pointer; margin-right: 4px;
+    text-transform: uppercase; letter-spacing: 1px;
+}
+.btn-toggle:hover { border-color: var(--sandbox-2); color: var(--sandbox-2); }
+.btn-bump:hover   { border-color: var(--host); color: var(--host); }
+
+/* -------------------------------- alerts severity buckets -------------------------------- */
+.alert-badge {
+    display: inline-block; min-width: 16px; padding: 0 5px; margin-left: 4px;
+    background: var(--incident-1); color: var(--bg);
+    border-radius: 8px; font-size: 10px; font-weight: bold; line-height: 16px; text-align: center;
+}
+.alerts-list { display: flex; flex-direction: column; gap: 8px; }
+.alert-card {
+    padding: 10px 14px; border: 1px solid var(--panel-edge); border-left-width: 4px;
+    background: var(--panel); cursor: pointer; transition: transform 60ms ease, border-color 120ms ease;
+}
+.alert-card:hover { transform: translateY(-1px); }
+.alert-card.unread { background: rgba(232, 163, 61, 0.05); }
+.alert-card.read { opacity: 0.6; }
+.alert-card.alert-info       { border-left-color: var(--sandbox-1); }
+.alert-card.alert-warning    { border-left-color: var(--host); }
+.alert-card.alert-attention  { border-left-color: var(--incident-2); }
+.alert-card.alert-donefornow { border-left-color: var(--sandbox-2); }
+.alert-card.alert-error      { border-left-color: var(--incident-1); }
+.alert-head { display: flex; gap: 12px; font-size: 10px; text-transform: uppercase; letter-spacing: 1px;
+              color: var(--muted); margin-bottom: 4px; }
+.alert-head .alert-kind { color: var(--host); font-weight: bold; }
+.alert-head .alert-source { color: var(--sandbox-1); }
+.alert-head .alert-time { margin-left: auto; }
+.alert-title { font-size: 13px; font-weight: bold; margin-bottom: 4px; }
+.alert-body { font-size: 11px; color: var(--fg); white-space: pre-wrap; margin: 0;
+              font-family: ui-monospace, Consolas, monospace; background: transparent; padding: 0; }
+.alert-bucket { margin-bottom: 16px; }
+.alert-bucket-head {
+    display: flex; gap: 10px; align-items: center;
+    padding: 4px 10px; font-size: 10px; text-transform: uppercase; letter-spacing: 2px;
+    border-bottom: 1px solid var(--panel-edge); margin-bottom: 6px;
+}
+.alert-bucket-head .bucket-count {
+    background: rgba(255,255,255,0.08); padding: 1px 8px; border-radius: 8px; font-size: 10px;
+}
+.alert-bucket-head .bucket-action {
+    margin-left: auto; background: transparent; color: var(--muted);
+    border: 1px solid var(--panel-edge); padding: 2px 8px; font-family: inherit;
+    font-size: 9px; cursor: pointer; letter-spacing: 1px;
+}
+.alert-bucket-head .bucket-action:hover { color: var(--host); border-color: var(--host); }
+.alert-bucket-error     .bucket-count { color: var(--incident-1); }
+.alert-bucket-attention .bucket-count { color: var(--incident-2); }
+.alert-bucket-warning   .bucket-count { color: var(--host); }
+.alert-bucket-donefornow .bucket-count { color: var(--sandbox-2); }
+.alert-bucket-info      .bucket-count { color: var(--sandbox-1); }
+.alerts-link { position: relative; }
+
+/* -------------------------------- providers live strip -------------------------------- */
+.vendor-live {
+    display: flex; align-items: center; gap: 10px; margin-top: 12px;
+    padding: 8px 10px; border: 1px solid var(--panel-edge); background: var(--panel);
+}
+.vendor-live .meter {
+    flex: 1; height: 8px; background: rgba(255,255,255,0.05); border-radius: 2px; overflow: hidden;
+}
+.vendor-live .meter-fill {
+    height: 100%; background: var(--sandbox-2); transition: width 300ms ease;
+}
+.vendor-live.over-amber .meter-fill { background: var(--host); }
+.vendor-live.over-red   .meter-fill { background: var(--incident-1); }
+
+/* -------------------------------- models + skills actions -------------------------------- */
+.cost-delta { color: var(--muted); font-size: 10px; }
+.cost-delta.better { color: var(--sandbox-2); }
+.cost-delta.worse  { color: var(--incident-1); }
+.set-default, .run-skill {
+    background: transparent; color: var(--sandbox-1); border: 1px solid var(--sandbox-1);
+    padding: 2px 10px; font-family: inherit; font-size: 10px; cursor: pointer; letter-spacing: 1px;
+}
+.set-default:hover, .run-skill:hover { background: var(--sandbox-1); color: var(--bg); }
+
+/* -------------------------------- nav + mgmt reuse -------------------------------- */
+.helm-nav {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 20px; background: #060b12; border-bottom: 1px solid var(--panel-edge);
+    font-size: 11px; letter-spacing: 1px; text-transform: uppercase;
+}
+.helm-nav .brand { color: var(--host); font-weight: bold; letter-spacing: 3px; margin-right: 16px; text-decoration: none; }
+.helm-nav a { color: var(--muted); text-decoration: none; padding: 4px 10px; border: 1px solid transparent; }
+.helm-nav a:hover { color: var(--fg); border-color: var(--panel-edge); }
+
+.mgmt-body { padding: 16px 24px; max-width: 1200px; }
+.mgmt-body h2 {
+    font-size: 13px; letter-spacing: 2px; text-transform: uppercase;
+    color: var(--host); margin: 20px 0 8px; border-bottom: 1px solid var(--panel-edge); padding-bottom: 4px;
+}
+.mgmt-body p { color: var(--fg); font-size: 13px; }
+.mgmt-body .muted { color: var(--muted); font-size: 12px; }
+.mgmt-body .empty-panel {
+    border: 1px dashed var(--panel-edge); padding: 24px; text-align: center;
+    color: var(--muted); font-style: italic;
+}
+.mgmt-body ul { color: var(--fg); font-size: 12px; line-height: 1.6; }
+
+.mgmt-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 10px; }
+.mgmt-table th, .mgmt-table td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--panel-edge); }
+.mgmt-table th { color: var(--host); text-transform: uppercase; letter-spacing: 1px; font-size: 10px; font-weight: normal; }
+.mgmt-table tr:hover td { background: rgba(232, 163, 61, 0.05); }
+.mgmt-table .mono { font-family: ui-monospace, Consolas, monospace; color: var(--muted); }
+.mgmt-table code { background: #060b12; padding: 1px 4px; color: var(--sandbox-1); }
+
+.pill { padding: 2px 8px; border-radius: 2px; font-size: 10px; letter-spacing: 1px; text-transform: uppercase; border: 1px solid; }
+.pill.ok { color: var(--sandbox-2); border-color: var(--sandbox-2); }
+.pill.tier-fast  { color: var(--sandbox-2); border-color: var(--sandbox-2); }
+.pill.tier-deep  { color: var(--host);      border-color: var(--host); }
+.pill.tier-code  { color: var(--sandbox-1); border-color: var(--sandbox-1); }
+
+/* -------------------------------- skills/new editor -------------------------------- */
+.new-skill-grid { display: grid; grid-template-columns: 1fr 320px; gap: 16px; margin-top: 12px; }
+.new-skill-grid .skill-xml {
+    width: 100%; height: 520px;
+    background: #060b12; color: #c9d1d9; border: 1px solid var(--panel-edge);
+    padding: 10px; font-family: ui-monospace, Consolas, monospace; font-size: 11.5px;
+    line-height: 1.45; resize: vertical;
+}
+.new-skill-grid .skill-xml:focus { outline: none; border-color: var(--host); }
+.new-skill-grid .skill-status { font-size: 12px; color: var(--fg); }
+.new-skill-grid .skill-status p { margin-top: 10px; }

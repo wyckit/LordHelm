@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Skill xmlns="https://lordhelm.dev/schemas/skill-manifest/v1">
+  <Id>execute-csharp</Id>
+  <Version>0.1.0</Version>
+  <ExecutionEnvironment>Docker</ExecutionEnvironment>
+  <RequiresApproval>false</RequiresApproval>
+  <RiskTier>Exec</RiskTier>
+  <Timeout>PT2M</Timeout>
+  <MinTrust>None</MinTrust>
+  <Description>Run a C# snippet inside a locked-down Docker sandbox via `dotnet script` and return stdout.</Description>
+  <Tags>
+    <Tag>sandbox</Tag>
+    <Tag>csharp</Tag>
+    <Tag>exec</Tag>
+  </Tags>
+  <ParameterSchema><![CDATA[{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["code"],
+    "properties": {
+      "code": { "type": "string", "minLength": 1, "maxLength": 65536 },
+      "stdin": { "type": "string", "default": "" },
+      "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 300, "default": 60 }
+    },
+    "additionalProperties": false
+  }]]></ParameterSchema>
+</Skill>

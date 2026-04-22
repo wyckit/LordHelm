@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Skill xmlns="https://lordhelm.dev/schemas/skill-manifest/v1">
+  <Id>csharp-scripting</Id>
+  <Version>0.1.0</Version>
+  <ExecutionEnvironment>Host</ExecutionEnvironment>
+  <RequiresApproval>true</RequiresApproval>
+  <RiskTier>Exec</RiskTier>
+  <Timeout>PT30S</Timeout>
+  <MinTrust>High</MinTrust>
+  <Description>Evaluate a C# script in-process via Roslyn with access to the live Lord Helm DI graph. `globals.Services` is the IServiceProvider; `globals.WriteLine` captures output.</Description>
+  <Tags>
+    <Tag>host</Tag>
+    <Tag>csharp</Tag>
+    <Tag>roslyn</Tag>
+    <Tag>scripting</Tag>
+    <Tag>introspect</Tag>
+  </Tags>
+  <ParameterSchema><![CDATA[{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["code"],
+    "properties": {
+      "code": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 16384,
+        "description": "C# script body. Script globals: Services (IServiceProvider), CallerId (string), Write/WriteLine for output."
+      }
+    },
+    "additionalProperties": false
+  }]]></ParameterSchema>
+</Skill>

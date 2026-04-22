@@ -48,6 +48,14 @@ else
 builder.Services.AddSingleton<ISkillCache>(_ => new SqliteSkillCache(skillsDbPath));
 builder.Services.AddSingleton<ManifestValidator>();
 builder.Services.AddSingleton<ISkillLoader, SkillLoader>();
+builder.Services.AddSingleton<ISkillAuthor>(sp =>
+{
+    var skillsDir = Path.GetFullPath(Path.Combine(builder.Environment.ContentRootPath, "..", "..", "skills"));
+    return new SkillAuthor(
+        sp.GetRequiredService<ManifestValidator>(),
+        sp.GetRequiredService<ISkillCache>(),
+        skillsDir);
+});
 
 // ---------------------------------------------------------------- transpiler + flag table
 builder.Services.AddSingleton<FlagMappingTable>(_ => FlagMappingTable.Default());
@@ -100,8 +108,20 @@ else
     builder.Services.AddSingleton<ISandboxRunner>(sp =>
         DockerSandboxRunner.CreateDefault(sp.GetRequiredService<ILogger<DockerSandboxRunner>>()));
 }
+// Per-skill Docker image map. Picks a sensible base image given the skill id.
+var sandboxImagesByTag = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+{
+    ["execute-python"]  = "python:3.12-slim",
+    ["execute-csharp"]  = "mcr.microsoft.com/dotnet/sdk:9.0",
+};
 builder.Services.AddSingleton<Func<SkillManifest, SandboxPolicy>>(_ => skill =>
-    SandboxPolicy.Default("python:3.12-slim@sha256:0000000000000000000000000000000000000000000000000000000000000000"));
+{
+    var baseImage = sandboxImagesByTag.TryGetValue(skill.Id, out var img)
+        ? img
+        : "python:3.12-slim";
+    return SandboxPolicy.Default(baseImage + "@sha256:0000000000000000000000000000000000000000000000000000000000000000");
+});
+builder.Services.AddSingleton<IHostSkillHandler, CSharpScriptHostHandler>();
 builder.Services.AddSingleton<IExecutionRouter, ExecutionRouter>();
 
 // ---------------------------------------------------------------- providers

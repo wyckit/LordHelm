@@ -25,6 +25,7 @@ public sealed class ExecutionRouter : IExecutionRouter
     private readonly IHostRunner _host;
     private readonly IApprovalGate _gate;
     private readonly Func<SkillManifest, SandboxPolicy> _policyFor;
+    private readonly IReadOnlyList<IHostSkillHandler> _hostSkillHandlers;
     private readonly ILogger<ExecutionRouter> _logger;
 
     public ExecutionRouter(
@@ -33,6 +34,7 @@ public sealed class ExecutionRouter : IExecutionRouter
         IHostRunner host,
         IApprovalGate gate,
         Func<SkillManifest, SandboxPolicy> policyFor,
+        IEnumerable<IHostSkillHandler> hostSkillHandlers,
         ILogger<ExecutionRouter> logger)
     {
         _transpiler = transpiler;
@@ -40,6 +42,7 @@ public sealed class ExecutionRouter : IExecutionRouter
         _host = host;
         _gate = gate;
         _policyFor = policyFor;
+        _hostSkillHandlers = hostSkillHandlers.ToList();
         _logger = logger;
     }
 
@@ -56,6 +59,20 @@ public sealed class ExecutionRouter : IExecutionRouter
             if (!decision.Approved)
             {
                 return new ToolInvocationResult(-1, string.Empty, decision.Reason, TimeSpan.Zero, skill.ExecEnv, false);
+            }
+        }
+
+        // Native in-process handler — bypasses the transpiler + HostRunner.
+        // Used for Lord-Helm-native skills (Roslyn scripting, engram queries)
+        // that aren't a CLI invocation at all.
+        if (skill.ExecEnv == ExecutionEnvironment.Host)
+        {
+            var handler = _hostSkillHandlers.FirstOrDefault(h => h.Handles(skill.Id));
+            if (handler is not null)
+            {
+                _logger.LogInformation("Skill {Skill} handled in-process by {Handler}", skill.Id, handler.GetType().Name);
+                var direct = await handler.RunAsync(skill, args, caller, ct);
+                return new ToolInvocationResult(direct.ExitCode, direct.Stdout, direct.Stderr, direct.Elapsed, ExecutionEnvironment.Host, true);
             }
         }
 
