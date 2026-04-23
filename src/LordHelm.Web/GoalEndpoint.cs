@@ -1,4 +1,5 @@
 using LordHelm.Orchestrator;
+using LordHelm.Orchestrator.Chat;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
@@ -10,7 +11,8 @@ public sealed record GoalApiRequest(
     string? PreferredVendor = null,
     string? Model = null,
     string? Tier = null,
-    int Priority = 0);
+    int Priority = 0,
+    bool Thinking = false);
 
 public static class GoalEndpoint
 {
@@ -29,7 +31,7 @@ public static class GoalEndpoint
     {
         endpoints.MapPost("/api/goals", async (
             GoalApiRequest body,
-            IGoalRunner runner,
+            IChatDispatcher dispatcher,
             IModelCatalog catalog,
             CancellationToken ct) =>
         {
@@ -43,9 +45,35 @@ public static class GoalEndpoint
                 model = catalog.Resolve(tier, body.PreferredVendor)?.ModelId;
             }
 
-            var req = new GoalRunRequest(body.Goal, body.PreferredVendor, model, body.Priority);
-            var result = await runner.RunAsync(req, ct);
-            return Results.Ok(result);
+            // Route through the unified dispatcher so API callers get the
+            // same LLM router + safety floor every other surface applies.
+            // SkipRouter=true when the API caller provided explicit hints
+            // — treat their selection as authoritative but still enforce
+            // the safety floor (Delete/Network/Exec → panel/approval).
+            var skipRouter = !string.IsNullOrEmpty(body.PreferredVendor) || model is not null;
+            var disp = await dispatcher.DispatchAsync(new ChatDispatchRequest(
+                Text: body.Goal,
+                SessionId: "api-" + Guid.NewGuid().ToString("N")[..8],
+                ExplicitVendor: body.PreferredVendor,
+                ExplicitTier: body.Tier,
+                ExplicitModel: model,
+                SkipRouter: skipRouter,
+                Thinking: body.Thinking), ct);
+
+            return Results.Ok(new
+            {
+                plan = new
+                {
+                    kind = disp.Plan.Kind.ToString(),
+                    personaHints = disp.Plan.PersonaHints,
+                    rationale = disp.Plan.Rationale,
+                    needsPanel = disp.Plan.NeedsPanel,
+                    panelSize = disp.Plan.PanelSize,
+                },
+                goal = disp.GoalResult,
+                reply = disp.ReplyText,
+                halted = disp.Halted,
+            });
         });
         return endpoints;
     }

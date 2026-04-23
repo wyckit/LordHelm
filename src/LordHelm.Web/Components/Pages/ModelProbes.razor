@@ -1,0 +1,261 @@
+@page "/models/probes"
+@rendermode InteractiveServer
+@inject LordHelm.Orchestrator.ModelDiscovery.IModelProbeRegistry Registry
+@inject LordHelm.Orchestrator.ModelDiscovery.ModelCatalogRefresher Refresher
+@inject LordHelm.Orchestrator.IModelCatalog Catalog
+@implements IDisposable
+
+<PageTitle>Lord Helm — Model Probes</PageTitle>
+
+<header class="helm-header">
+    <h1>Model probes <span class="subtitle">how each CLI is queried for its model list</span></h1>
+</header>
+
+<section class="mgmt-body">
+    <p class="muted">
+        Each row defines the invocation <code>ModelCatalogRefresher</code> uses to discover a vendor's
+        current models. The composed prober tries the native CLI first
+        (<code>CliModelProber</code>); if it returns zero parseable models, the
+        <code>LlmFallbackProber</code> asks the model itself to list its siblings. Edits persist to
+        <code>data/model-probes.json</code> and take effect immediately on the next trigger.
+    </p>
+    <p class="muted" style="margin-top:4px">
+        <strong>Triggers:</strong> 6-hour timer · startup · <code>↻</code> header button · Scout CLI-version
+        mutation (event) · auth-probe <code>AuthOk</code> false→true transition (event) · <em>probe now</em>
+        button below.
+    </p>
+
+    <table class="mgmt-table">
+        <thead>
+            <tr>
+                <th>Vendor</th>
+                <th>Executable</th>
+                <th>Args</th>
+                <th>Stdin</th>
+                <th>Timeout</th>
+                <th>Last result</th>
+                <th>In catalog</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+        @foreach (var s in specs)
+        {
+            var edit = GetEdit(s.VendorId);
+            var last = _lastResults.TryGetValue(s.VendorId, out var r) ? r : null;
+            var catalogCount = Catalog.GetModels(s.VendorId).Count(m => m.IsAvailable);
+            <tr>
+                <td><strong>@s.VendorId</strong></td>
+                <td><input type="text" @bind="edit.Executable" style="width:100px" /></td>
+                <td><input type="text" @bind="edit.ArgsJoined" style="width:200px" placeholder="/model" /></td>
+                <td><input type="text" @bind="edit.StdinInput" style="width:160px" placeholder="\n or /model\n/exit\n" /></td>
+                <td><input type="number" min="1" step="1" @bind="edit.TimeoutSeconds" style="width:60px" /></td>
+                <td class="mono" style="font-size:10px">
+                    @if (last is null)
+                    {
+                        <span class="muted">—</span>
+                    }
+                    else if (last.Succeeded)
+                    {
+                        <span class="pill ok" style="font-size:9px">✓ @last.Models.Count</span>
+                        <div class="muted" style="font-size:9px; margin-top:2px">@last.ElapsedMs ms · @last.Source</div>
+                    }
+                    else
+                    {
+                        <span class="pill" style="font-size:9px; border-color:var(--incident-1); color:var(--incident-1)">✗</span>
+                        <div class="muted" style="font-size:9px; margin-top:2px">@Truncate(last.Error ?? "unknown", 60)</div>
+                    }
+                </td>
+                <td class="mono" style="font-size:10px">
+                    <a href="/models" style="color:var(--sandbox-2)">@catalogCount available</a>
+                </td>
+                <td>
+                    <button @onclick="() => Save(s.VendorId)">save</button>
+                    <button @onclick="() => ProbeOne(s.VendorId)" disabled="@(_busy.Contains(s.VendorId))">
+                        @(_busy.Contains(s.VendorId) ? "probing…" : "probe now")
+                    </button>
+                    @if (last is not null && (!string.IsNullOrEmpty(last.RawSample) || last.Models.Count > 0))
+                    {
+                        <button @onclick="() => ToggleDetail(s.VendorId)" title="Show raw probe output + discovered models">
+                            @(_detailOpen.Contains(s.VendorId) ? "hide" : "details")
+                        </button>
+                    }
+                </td>
+            </tr>
+            @if (_detailOpen.Contains(s.VendorId) && last is not null)
+            {
+                <tr>
+                    <td colspan="8" style="background:rgba(255,255,255,0.02); padding:10px">
+                        @if (last.Models.Count > 0)
+                        {
+                            <strong style="font-size:11px">Discovered models:</strong>
+                            <ul class="mono" style="font-size:10px; margin-top:4px">
+                                @foreach (var m in last.Models)
+                                {
+                                    <li><code>@m.ModelId</code> — @m.InferredTier — @m.Description</li>
+                                }
+                            </ul>
+                        }
+                        @if (!string.IsNullOrEmpty(last.RawSample))
+                        {
+                            <strong style="font-size:11px; display:block; margin-top:8px">Raw CLI output (first 800 chars):</strong>
+                            <pre class="mono" style="font-size:10px; background:rgba(0,0,0,0.3); padding:8px; white-space:pre-wrap; max-height:240px; overflow:auto">@last.RawSample</pre>
+                        }
+                    </td>
+                </tr>
+            }
+        }
+        </tbody>
+    </table>
+
+    <div class="helm-toolbar" style="margin-top:10px; gap:8px">
+        <button @onclick="ProbeAll" disabled="@(_busy.Count > 0)">probe all vendors</button>
+        @if (!string.IsNullOrEmpty(toast))
+        {
+            <span class="pill ok">@toast</span>
+        }
+    </div>
+</section>
+
+@code {
+    private sealed class Edit
+    {
+        public string Executable { get; set; } = "";
+        public string ArgsJoined { get; set; } = "";
+        public string StdinInput { get; set; } = "";
+        public int TimeoutSeconds { get; set; } = 15;
+    }
+
+    private sealed record LastResult(
+        string VendorId, bool Succeeded, int Count,
+        IReadOnlyList<LordHelm.Orchestrator.ModelDiscovery.ProbedModel> Models,
+        string? Error, long ElapsedMs, string Source, string? RawSample);
+
+    private IReadOnlyList<LordHelm.Orchestrator.ModelDiscovery.ModelProbeSpec> specs =
+        Array.Empty<LordHelm.Orchestrator.ModelDiscovery.ModelProbeSpec>();
+    private readonly Dictionary<string, Edit> _edits = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, LastResult> _lastResults = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _busy = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _detailOpen = new(StringComparer.OrdinalIgnoreCase);
+    private string? toast;
+
+    protected override void OnInitialized()
+    {
+        specs = Registry.All;
+        foreach (var s in specs)
+            _edits[s.VendorId] = new Edit
+            {
+                Executable = s.Executable,
+                ArgsJoined = string.Join(' ', s.Args),
+                StdinInput = s.StdinInput ?? "",
+                TimeoutSeconds = (int?)s.Timeout?.TotalSeconds ?? 15,
+            };
+        Registry.OnChanged += HandleRegistryChanged;
+        Catalog.OnChanged += HandleCatalogChanged;
+    }
+
+    private void HandleRegistryChanged()
+    {
+        specs = Registry.All;
+        InvokeAsync(StateHasChanged);
+    }
+    private void HandleCatalogChanged() => InvokeAsync(StateHasChanged);
+
+    private Edit GetEdit(string vendor) =>
+        _edits.TryGetValue(vendor, out var e) ? e : (_edits[vendor] = new Edit());
+
+    private void ToggleDetail(string vendor)
+    {
+        if (!_detailOpen.Add(vendor)) _detailOpen.Remove(vendor);
+    }
+
+    private void Save(string vendor)
+    {
+        var edit = GetEdit(vendor);
+        var args = edit.ArgsJoined
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToList();
+        // Literal "\n" in the textbox becomes a real newline so stdin-piped
+        // slash commands like "/model\n/exit\n" work when typed as source.
+        var stdin = string.IsNullOrWhiteSpace(edit.StdinInput)
+            ? null
+            : edit.StdinInput.Replace("\\n", "\n");
+
+        Registry.Upsert(new LordHelm.Orchestrator.ModelDiscovery.ModelProbeSpec(
+            VendorId: vendor,
+            Executable: edit.Executable.Trim(),
+            Args: args,
+            StdinInput: stdin,
+            Timeout: TimeSpan.FromSeconds(Math.Max(1, edit.TimeoutSeconds))));
+        specs = Registry.All;
+        toast = $"saved {vendor}";
+    }
+
+    private async Task ProbeOne(string vendor)
+    {
+        if (_busy.Contains(vendor)) return;
+        _busy.Add(vendor);
+        toast = null;
+        StateHasChanged();
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            // Per-vendor refresh via the event-driven API; no other vendors
+            // are touched. Debounced internally, so a double-click on this
+            // button still fires only one probe within a 30s window.
+            var result = await Refresher.RefreshVendorAsync(vendor);
+            sw.Stop();
+            if (result is null)
+            {
+                _lastResults[vendor] = new LastResult(vendor, false, 0,
+                    Array.Empty<LordHelm.Orchestrator.ModelDiscovery.ProbedModel>(),
+                    "debounced (try again in ~30s)", sw.ElapsedMilliseconds, "debounce", null);
+                toast = $"{vendor}: debounced";
+            }
+            else
+            {
+                _lastResults[vendor] = new LastResult(
+                    VendorId: vendor,
+                    Succeeded: result.Succeeded,
+                    Count: result.Models.Count,
+                    Models: result.Models,
+                    Error: result.Error,
+                    ElapsedMs: sw.ElapsedMilliseconds,
+                    Source: result.Source ?? "unknown",
+                    RawSample: result.RawOutput);
+                toast = result.Succeeded
+                    ? $"{vendor}: {result.Models.Count} models ({sw.ElapsedMilliseconds} ms)"
+                    : $"{vendor} failed: {result.Error}";
+            }
+        }
+        catch (Exception ex)
+        {
+            sw.Stop();
+            _lastResults[vendor] = new LastResult(vendor, false, 0,
+                Array.Empty<LordHelm.Orchestrator.ModelDiscovery.ProbedModel>(),
+                ex.Message, sw.ElapsedMilliseconds, "error", null);
+            toast = $"probe error: {ex.Message}";
+        }
+        finally
+        {
+            _busy.Remove(vendor);
+            StateHasChanged();
+        }
+    }
+
+    private async Task ProbeAll()
+    {
+        foreach (var s in specs)
+            if (!_busy.Contains(s.VendorId))
+                await ProbeOne(s.VendorId);
+    }
+
+    private static string Truncate(string s, int max) =>
+        s.Length <= max ? s : s.Substring(0, max) + "…";
+
+    public void Dispose()
+    {
+        Registry.OnChanged -= HandleRegistryChanged;
+        Catalog.OnChanged -= HandleCatalogChanged;
+    }
+}

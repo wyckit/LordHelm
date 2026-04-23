@@ -1,0 +1,208 @@
+@*
+    Topology widget — design-handoff centerpiece. SVG grid backdrop + SVG edges
+    (dashed+animated when the destination is loaded, red when blocked, faint
+    purple when idle) + HTML nodes in absolute-positioned overlay (so we can
+    use CSS gradients, pulses, hover tooltips without hand-rolling everything
+    in SVG). Node size scales with load (0-1). A client-side JS module
+    (helmtopo.js) reads data-x/y attributes and animates packets along edges
+    via requestAnimationFrame — panel-endorsed approach since 90ms server
+    ticks over SignalR aren't realistic.
+*@
+
+@inject LordHelm.Orchestrator.Topology.TopologyState Topology
+@inject IJSRuntime JS
+@inject NavigationManager Nav
+@implements IDisposable
+
+<div class="topo" @ref="_host">
+    <svg class="topo-backdrop" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+            <pattern id="topo-grid" width="28" height="28" patternUnits="userSpaceOnUse">
+                <path d="M 28 0 L 0 0 0 28" fill="none" stroke="var(--line-1)" stroke-width="1" />
+            </pattern>
+            <radialGradient id="topo-helm-glow">
+                <stop offset="0%" stop-color="rgba(139,124,255,0.35)" />
+                <stop offset="100%" stop-color="rgba(139,124,255,0)" />
+            </radialGradient>
+        </defs>
+        <rect width="100%" height="100%" fill="url(#topo-grid)" opacity="0.5" />
+        <circle cx="50%" cy="50%" r="18%" fill="url(#topo-helm-glow)" />
+    </svg>
+
+    <svg class="topo-edges" viewBox="0 0 100 100" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
+        @foreach (var edge in _edges)
+        {
+            if (!_byId.TryGetValue(edge.From, out var a) || !_byId.TryGetValue(edge.To, out var b)) continue;
+
+            if (edge.Kind == LordHelm.Orchestrator.Topology.EdgeKind.Dataflow)
+            {
+                // Staleness fade: fresh (<120s) bright teal, >120s linear fade to 0, drop at 10min (tracker prunes).
+                var age = edge.ObservedAt is null ? 600 : (DateTimeOffset.UtcNow - edge.ObservedAt.Value).TotalSeconds;
+                var alpha = Math.Max(0.05, 1.0 - age / 120.0);
+                var stroke = $"rgba(94,228,213,{alpha.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)})";
+                <line x1="@Fmt(a.X)" y1="@Fmt(a.Y)" x2="@Fmt(b.X)" y2="@Fmt(b.Y)"
+                      stroke="@stroke"
+                      stroke-width="0.28"
+                      stroke-dasharray="0.6 0.4"
+                      stroke-linecap="round"
+                      vector-effect="non-scaling-stroke">
+                    <animate attributeName="stroke-dashoffset" from="0" to="-2.0" dur="1s" repeatCount="indefinite" />
+                </line>
+                continue;
+            }
+
+            var active = b.Load > 0.2;
+            var blocked = b.Status == LordHelm.Orchestrator.Topology.AgentRunState.Blocked;
+            var strokeH = blocked
+                ? "rgba(248,113,113,0.45)"
+                : (active
+                    ? $"rgba(94,228,213,{(0.25 + b.Load * 0.4).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)})"
+                    : "rgba(139,124,255,0.12)");
+            var dashH = active ? "0.4 0.5" : null;
+            <line x1="@Fmt(a.X)" y1="@Fmt(a.Y)" x2="@Fmt(b.X)" y2="@Fmt(b.Y)"
+                  stroke="@strokeH"
+                  stroke-width="@(active ? "0.22" : "0.14")"
+                  stroke-dasharray="@dashH"
+                  vector-effect="non-scaling-stroke">
+                @if (active)
+                {
+                    <animate attributeName="stroke-dashoffset" from="0" to="-1.8" dur="1.2s" repeatCount="indefinite" />
+                }
+            </line>
+        }
+        <g class="topo-packets"></g>
+    </svg>
+
+    <div class="topo-nodes">
+        @foreach (var n in _nodes)
+        {
+            var size = SizeFor(n);
+            var hue = HueFor(n);
+            var classes = $"topo-node topo-{n.Kind.ToString().ToLowerInvariant()} topo-status-{n.Status.ToString().ToLowerInvariant()}";
+            <div class="@classes"
+                 data-id="@n.Id"
+                 data-x="@Fmt(n.X)"
+                 data-y="@Fmt(n.Y)"
+                 data-kind="@n.Kind.ToString().ToLowerInvariant()"
+                 data-load="@Fmt(n.Load)"
+                 data-status="@n.Status.ToString().ToLowerInvariant()"
+                 style="left: calc(@Fmt(n.X)% - @(size / 2)px); top: calc(@Fmt(n.Y)% - @(size / 2)px); width: @(size)px; height: @(size)px; --hue: @hue;"
+                 title="@($"{n.Label} · load {(int)(n.Load * 100)}%" + (n.Task is null ? "" : $"\n{n.Task}") + "\ndbl-click for deep dive")"
+                 @ondblclick="() => OpenDeepDive(n.Id)">
+                @if (n.Kind == LordHelm.Orchestrator.Topology.TopologyKind.Helm)
+                {
+                    <span class="topo-helm-glyph">♛</span>
+                    <span class="topo-aura topo-aura-1"></span>
+                    <span class="topo-aura topo-aura-2"></span>
+                }
+                else if (n.Kind == LordHelm.Orchestrator.Topology.TopologyKind.Orc)
+                {
+                    <span class="topo-orc-glyph">@(n.Label[0])</span>
+                }
+                else
+                {
+                    <span class="topo-agent-glyph">@GlyphFor(n.AgentType)</span>
+                }
+                <svg class="topo-loadring" viewBox="0 0 36 36" xmlns="http://www.w3.org/2000/svg">
+                    <circle cx="18" cy="18" r="16" fill="none"
+                            stroke="var(--line-1)" stroke-width="1.5" />
+                    <circle cx="18" cy="18" r="16" fill="none"
+                            stroke="var(--hue, var(--brand))"
+                            stroke-width="1.5" stroke-linecap="round"
+                            stroke-dasharray="@(n.Load * 100).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) 100"
+                            transform="rotate(-90 18 18)" />
+                </svg>
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    private ElementReference _host;
+    private IJSObjectReference? _js;
+    private IReadOnlyList<LordHelm.Orchestrator.Topology.TopologyNode> _nodes = Array.Empty<LordHelm.Orchestrator.Topology.TopologyNode>();
+    private IReadOnlyList<LordHelm.Orchestrator.Topology.TopologyEdge> _edges = Array.Empty<LordHelm.Orchestrator.Topology.TopologyEdge>();
+    private Dictionary<string, LordHelm.Orchestrator.Topology.TopologyNode> _byId = new();
+
+    protected override void OnInitialized()
+    {
+        Refresh();
+        Topology.OnChanged += HandleChanged;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            try
+            {
+                _js = await JS.InvokeAsync<IJSObjectReference>("import", "/helmtopo.js");
+                await _js.InvokeVoidAsync("start", _host);
+            }
+            catch { /* JS module optional — layout still renders without packet animation */ }
+        }
+    }
+
+    private void HandleChanged()
+    {
+        Refresh();
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void Refresh()
+    {
+        _nodes = Topology.Nodes;
+        _edges = Topology.Edges;
+        _byId = _nodes.ToDictionary(n => n.Id);
+    }
+
+    private static double SizeFor(LordHelm.Orchestrator.Topology.TopologyNode n)
+    {
+        // Base sizes per kind + load-driven scaling.
+        var (min, max) = n.Kind switch
+        {
+            LordHelm.Orchestrator.Topology.TopologyKind.Helm  => (56.0, 80.0),
+            LordHelm.Orchestrator.Topology.TopologyKind.Orc   => (34.0, 54.0),
+            LordHelm.Orchestrator.Topology.TopologyKind.Agent => (22.0, 40.0),
+            _ => (22.0, 40.0),
+        };
+        return min + (max - min) * n.Load;
+    }
+
+    private static string HueFor(LordHelm.Orchestrator.Topology.TopologyNode n) => n.Kind switch
+    {
+        LordHelm.Orchestrator.Topology.TopologyKind.Helm => "var(--brand)",
+        LordHelm.Orchestrator.Topology.TopologyKind.Orc  => "var(--accent)",
+        _ => n.AgentType switch
+        {
+            LordHelm.Orchestrator.Topology.AgentType.Code     => "var(--hue-code)",
+            LordHelm.Orchestrator.Topology.AgentType.Research => "var(--hue-research)",
+            LordHelm.Orchestrator.Topology.AgentType.Data     => "var(--hue-data)",
+            LordHelm.Orchestrator.Topology.AgentType.Ops      => "var(--hue-ops)",
+            LordHelm.Orchestrator.Topology.AgentType.Write    => "var(--hue-write)",
+            LordHelm.Orchestrator.Topology.AgentType.Design   => "var(--hue-design)",
+            _ => "var(--fg-3)",
+        },
+    };
+
+    private static string GlyphFor(LordHelm.Orchestrator.Topology.AgentType? t) => t switch
+    {
+        LordHelm.Orchestrator.Topology.AgentType.Code     => "‹/›",
+        LordHelm.Orchestrator.Topology.AgentType.Research => "◎",
+        LordHelm.Orchestrator.Topology.AgentType.Data     => "▦",
+        LordHelm.Orchestrator.Topology.AgentType.Ops      => "⚙",
+        LordHelm.Orchestrator.Topology.AgentType.Write    => "✎",
+        LordHelm.Orchestrator.Topology.AgentType.Design   => "◈",
+        _ => "·",
+    };
+
+    private static string Fmt(double d) => d.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+
+    private void OpenDeepDive(string id) => Nav.NavigateTo($"/agents/{id}");
+
+    public void Dispose()
+    {
+        Topology.OnChanged -= HandleChanged;
+        _ = _js?.DisposeAsync();
+    }
+}

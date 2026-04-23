@@ -1,0 +1,29 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Skill xmlns="https://lordhelm.dev/schemas/skill-manifest/v1">
+  <Id>gemini-vertex-ai-api-dev</Id>
+  <Version>0.1.0</Version>
+  <ExecutionEnvironment>Host</ExecutionEnvironment>
+  <RequiresApproval>false</RequiresApproval>
+  <RiskTier>Read</RiskTier>
+  <Timeout>PT2M</Timeout>
+  <MinTrust>Low</MinTrust>
+  <Description>Guides usage of the Gemini API on Google Cloud Vertex AI with the Gen AI SDK. Use when the user is in an enterprise environment or explicitly mentions Vertex AI. Covers SDK usage (Python, JS/TS, Go, Java, C#), Live API, tools, multimedia generation, context caching, and batch prediction. Requires active Google Cloud credentials and Vertex AI API enabled.</Description>
+  <Tags>
+    <Tag>gemini</Tag>
+    <Tag>google</Tag>
+    <Tag>vertex-ai</Tag>
+    <Tag>enterprise</Tag>
+    <Tag>cloud</Tag>
+    <Tag>batch</Tag>
+  </Tags>
+  <ParameterSchema><![CDATA[{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["task"],
+    "properties": {
+      "task": { "type": "string", "minLength": 1 },
+      "context": { "type": "string" }
+    },
+    "additionalProperties": false
+  }]]></ParameterSchema>
+</Skill>

@@ -3,8 +3,10 @@ using LordHelm.Core;
 using LordHelm.Execution;
 using LordHelm.Monitor;
 using LordHelm.Orchestrator;
+using LordHelm.Orchestrator.ModelDiscovery;
 using LordHelm.Orchestrator.Overseers;
 using LordHelm.Providers;
+using LordHelm.Providers.Adapters;
 using LordHelm.Scout;
 using LordHelm.Scout.Parsers;
 using LordHelm.Skills;
@@ -26,6 +28,27 @@ var auditDbPath = Path.Combine(dataDir, "audit.db");
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
 builder.Services.AddSingleton<WidgetState>();
+builder.Services.AddSingleton<LordHelm.Orchestrator.Topology.TopologyState>();
+builder.Services.AddSingleton<LordHelm.Orchestrator.Topology.IFleetTaskSource, LordHelm.Web.Topology.WidgetStateFleetTaskSource>();
+builder.Services.AddSingleton<LordHelm.Orchestrator.Topology.DataflowTracker>();
+builder.Services.AddHostedService<LordHelm.Orchestrator.Topology.TopologyProjectionService>();
+builder.Services.AddSingleton<LordHelm.Orchestrator.Artifacts.IArtifactStore>(sp =>
+{
+    var root = Path.Combine(dataDir, "artifacts");
+    return new LordHelm.Orchestrator.Artifacts.FileArtifactStore(
+        root,
+        sp.GetRequiredService<ILogger<LordHelm.Orchestrator.Artifacts.FileArtifactStore>>(),
+        sp.GetService<IEngramClient>());
+});
+builder.Services.AddSingleton<LordHelm.Web.Layout.DashboardLayoutState>();
+builder.Services.AddSingleton<LordHelm.Web.Layout.IDashboardLayoutStore>(sp =>
+{
+    var path = Path.Combine(dataDir, "dashboard-layout.json");
+    return new LordHelm.Web.Layout.JsonFileDashboardLayoutStore(path,
+        sp.GetRequiredService<ILogger<LordHelm.Web.Layout.JsonFileDashboardLayoutStore>>());
+});
+builder.Services.AddHostedService<LordHelm.Web.Layout.DashboardLayoutPersistenceHostedService>();
+builder.Services.AddSingleton<LordHelm.Web.Layout.LayoutPresetResolver>();
 
 // ---------------------------------------------------------------- engram facade
 // Default: in-process fallback client. To opt in to live MCP transport, set
@@ -48,6 +71,15 @@ else
 builder.Services.AddSingleton<ISkillCache>(_ => new SqliteSkillCache(skillsDbPath));
 builder.Services.AddSingleton<ManifestValidator>();
 builder.Services.AddSingleton<ISkillLoader, SkillLoader>();
+// Skill exporters — Lord Helm pushes its manifests into each CLI's native
+// instruction-file directory so the upstream agent can invoke the same
+// skill library Lord Helm orchestrates. Different CLIs have different
+// formats: Claude = SKILL.md with YAML frontmatter, Codex = plain
+// markdown prompts, Gemini = command markdown. Exporters handle the shape
+// conversion; the operator clicks one button per vendor on /skills.
+builder.Services.AddSingleton<LordHelm.Skills.Export.ISkillExporter, LordHelm.Skills.Export.ClaudeSkillExporter>();
+builder.Services.AddSingleton<LordHelm.Skills.Export.ISkillExporter, LordHelm.Skills.Export.CodexPromptExporter>();
+builder.Services.AddSingleton<LordHelm.Skills.Export.ISkillExporter, LordHelm.Skills.Export.GeminiCommandExporter>();
 builder.Services.AddSingleton<ISkillAuthor>(sp =>
 {
     var skillsDir = Path.GetFullPath(Path.Combine(builder.Environment.ContentRootPath, "..", "..", "skills"));
@@ -83,7 +115,23 @@ builder.Services.AddSingleton<ScoutService>(sp => new ScoutService(
     sp.GetRequiredService<ScoutOptions>(),
     sp.GetRequiredService<ICliSpecStore>(),
     sp.GetRequiredService<ILogger<ScoutService>>(),
-    onMutation: ev => sp.GetRequiredService<ITranspilerCacheInvalidator>().Invalidate(ev.VendorId, ev.ToVersion)));
+    onMutation: ev =>
+    {
+        // 1. Invalidate the transpiler cache for that vendor (existing behavior).
+        sp.GetRequiredService<ITranspilerCacheInvalidator>().Invalidate(ev.VendorId, ev.ToVersion);
+        // 2. Event-driven model refresh — the CLI's flag/version surface
+        //    just changed for this vendor, so its model list might have
+        //    changed too. Fire-and-forget so Scout's own loop isn't blocked.
+        var refresher = sp.GetService<ModelCatalogRefresher>();
+        if (refresher is not null)
+        {
+            _ = Task.Run(async () =>
+            {
+                try { await refresher.RefreshVendorAsync(ev.VendorId); }
+                catch { /* refresher logs its own failures */ }
+            });
+        }
+    }));
 builder.Services.AddHostedService(sp => sp.GetRequiredService<ScoutService>());
 
 // ---------------------------------------------------------------- execution
@@ -122,23 +170,80 @@ builder.Services.AddSingleton<Func<SkillManifest, SandboxPolicy>>(_ => skill =>
     return SandboxPolicy.Default(baseImage + "@sha256:0000000000000000000000000000000000000000000000000000000000000000");
 });
 builder.Services.AddSingleton<IHostSkillHandler, CSharpScriptHostHandler>();
+builder.Services.AddSingleton<IHostSkillHandler, FileSystemHostHandler>();
 builder.Services.AddSingleton<IExecutionRouter, ExecutionRouter>();
 
 // ---------------------------------------------------------------- providers
 builder.Services.AddSingleton<ClaudeCliModelClient>();
 builder.Services.AddSingleton<GeminiCliModelClient>();
 builder.Services.AddSingleton<CodexCliModelClient>();
-builder.Services.AddSingleton<MultiProviderOrchestrator>(sp => new MultiProviderOrchestrator(
-    providers: new[]
-    {
-        new ProviderConfig("claude", "claude-opus-4-7", new RateLimitGovernor(60, TimeSpan.FromMinutes(1)), sp.GetRequiredService<ClaudeCliModelClient>(), Priority: 100),
-        new ProviderConfig("gemini", "gemini-2.5-pro",  new RateLimitGovernor(60, TimeSpan.FromMinutes(1)), sp.GetRequiredService<GeminiCliModelClient>(), Priority: 80),
-        new ProviderConfig("codex",  "o4",              new RateLimitGovernor(60, TimeSpan.FromMinutes(1)), sp.GetRequiredService<CodexCliModelClient>(),  Priority: 60),
-    },
-    policy: FailoverPolicy.PriorityWeighted,
-    logger: sp.GetRequiredService<ILogger<MultiProviderOrchestrator>>()));
-builder.Services.AddSingleton<IProviderOrchestrator>(sp => sp.GetRequiredService<MultiProviderOrchestrator>());
-builder.Services.AddSingleton<IProviderHealth>(sp => sp.GetRequiredService<MultiProviderOrchestrator>());
+
+// Agent adapter seam — Claude/Codex/Gemini as hot-swappable IAgentModelAdapter.
+// The registry enumerates them; AdapterRouter scores them per-request using
+// configurable RouterWeights (persisted to data/routing-weights.json);
+// AdapterProviderOrchestrator exposes the legacy IProviderOrchestrator surface.
+// Each adapter also receives the IModelCapabilityProvider so different model
+// ids under the same vendor can override context/cost/mode at catalog level.
+builder.Services.AddSingleton<IAgentModelAdapter>(sp => new ClaudeCodeAdapter(
+    sp.GetRequiredService<ClaudeCliModelClient>(),
+    catalog: sp.GetService<IModelCapabilityProvider>(),
+    usageReporter: sp.GetService<LordHelm.Core.IUsageReporter>()));
+builder.Services.AddSingleton<IAgentModelAdapter>(sp => new CodexCliAdapter(
+    sp.GetRequiredService<CodexCliModelClient>(),
+    catalog: sp.GetService<IModelCapabilityProvider>(),
+    usageReporter: sp.GetService<LordHelm.Core.IUsageReporter>()));
+builder.Services.AddSingleton<IAgentModelAdapter>(sp => new GeminiCliAdapter(
+    sp.GetRequiredService<GeminiCliModelClient>(),
+    catalog: sp.GetService<IModelCapabilityProvider>(),
+    usageReporter: sp.GetService<LordHelm.Core.IUsageReporter>()));
+builder.Services.AddSingleton<IAgentAdapterRegistry, AgentAdapterRegistry>();
+// Usage telemetry — real per-call accumulation + auth probes every 5 min.
+// Panel-endorsed: no CLI has /status, so the only source of truth is
+// adapter responses + auth-probe results from tiny inference calls.
+builder.Services.AddSingleton<LordHelm.Core.UsageState>();
+builder.Services.AddSingleton<LordHelm.Orchestrator.Usage.UsageAccumulator>();
+builder.Services.AddSingleton<LordHelm.Core.IUsageReporter>(sp =>
+    sp.GetRequiredService<LordHelm.Orchestrator.Usage.UsageAccumulator>());
+builder.Services.AddSingleton<LordHelm.Orchestrator.Usage.AuthProbeSpecFactory>();
+// Build one IUsageProbe per vendor, resolving the CURRENT Fast-tier model
+// from IModelCatalog. ModelCatalogRefresher keeps that Fast resolution live
+// so auth probes track whatever the CLI's subscription actually offers.
+builder.Services.AddSingleton<LordHelm.Orchestrator.Usage.IUsageProbe>(sp => new LordHelm.Orchestrator.Usage.CliAuthProbe(
+    sp.GetRequiredService<LordHelm.Orchestrator.Usage.AuthProbeSpecFactory>().BuildFor("claude"),
+    sp.GetRequiredService<ILogger<LordHelm.Orchestrator.Usage.CliAuthProbe>>()));
+builder.Services.AddSingleton<LordHelm.Orchestrator.Usage.IUsageProbe>(sp => new LordHelm.Orchestrator.Usage.CliAuthProbe(
+    sp.GetRequiredService<LordHelm.Orchestrator.Usage.AuthProbeSpecFactory>().BuildFor("gemini"),
+    sp.GetRequiredService<ILogger<LordHelm.Orchestrator.Usage.CliAuthProbe>>()));
+builder.Services.AddSingleton<LordHelm.Orchestrator.Usage.IUsageProbe>(sp => new LordHelm.Orchestrator.Usage.CliAuthProbe(
+    sp.GetRequiredService<LordHelm.Orchestrator.Usage.AuthProbeSpecFactory>().BuildFor("codex"),
+    sp.GetRequiredService<ILogger<LordHelm.Orchestrator.Usage.CliAuthProbe>>()));
+builder.Services.AddSingleton<LordHelm.Orchestrator.Usage.UsageProbeOptions>();
+builder.Services.AddSingleton<LordHelm.Orchestrator.Usage.UsageProbeService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<LordHelm.Orchestrator.Usage.UsageProbeService>());
+builder.Services.AddHostedService<LordHelm.Orchestrator.Usage.SubscriptionExhaustionMonitor>();
+builder.Services.AddSingleton<IRouterWeights, RouterWeightsProvider>();
+builder.Services.AddSingleton<IRouterWeightsStore>(sp =>
+{
+    var path = Path.Combine(dataDir, "routing-weights.json");
+    return new JsonFileRouterWeightsStore(path, sp.GetRequiredService<ILogger<JsonFileRouterWeightsStore>>());
+});
+builder.Services.AddHostedService<RouterWeightsPersistenceHostedService>();
+
+// Primary-CLI preference — drives default vendor/model/tier for every dispatch
+// surface (throne, chat, /helm commands). Persisted to data/helm-preference.json.
+builder.Services.AddSingleton<HelmPreferenceState>();
+builder.Services.AddSingleton<IHelmPreferenceStore>(sp =>
+{
+    var path = Path.Combine(dataDir, "helm-preference.json");
+    return new JsonFileHelmPreferenceStore(path,
+        sp.GetRequiredService<ILogger<JsonFileHelmPreferenceStore>>());
+});
+builder.Services.AddHostedService<HelmPreferencePersistenceHostedService>();
+
+builder.Services.AddSingleton<IAdapterRouter, AdapterRouter>();
+builder.Services.AddSingleton<AdapterProviderOrchestrator>();
+builder.Services.AddSingleton<IProviderOrchestrator>(sp => sp.GetRequiredService<AdapterProviderOrchestrator>());
+builder.Services.AddSingleton<IProviderHealth>(sp => sp.GetRequiredService<AdapterProviderOrchestrator>());
 
 // ---------------------------------------------------------------- monitor
 builder.Services.AddSingleton<Watcher>();
@@ -148,15 +253,61 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<SseLogBroadcaster>
 
 // ---------------------------------------------------------------- orchestrator
 builder.Services.AddSingleton<LlmDecomposerOptions>();
-builder.Services.AddSingleton<IModelCatalog>(_ => new ModelCatalog());
+builder.Services.AddSingleton<ModelCatalog>(_ => new ModelCatalog());
+builder.Services.AddSingleton<IModelCatalog>(sp => sp.GetRequiredService<ModelCatalog>());
+builder.Services.AddSingleton<IModelCapabilityProvider>(sp => sp.GetRequiredService<ModelCatalog>());
 builder.Services.AddSingleton<IModelCatalogStore>(sp =>
 {
     var path = Path.Combine(dataDir, "models.json");
     return new JsonFileModelCatalogStore(path, sp.GetRequiredService<ILogger<JsonFileModelCatalogStore>>());
 });
 builder.Services.AddHostedService<ModelCatalogPersistenceHostedService>();
+
+// CLI-driven model discovery: each vendor's CLI is the authoritative source
+// for its available models (a `/model` slash command or equivalent). Probe
+// specs are mutable via /models/probes and persisted to data/model-probes.json.
+// Each vendor's composed prober tries the native CLI first; on failure it
+// falls back to asking the model itself to enumerate its siblings.
+builder.Services.AddSingleton<IModelListParser, NumberedListModelParser>();
+builder.Services.AddSingleton<IModelProbeRegistry>(_ => new ModelProbeRegistry());
+builder.Services.AddSingleton<IModelProbeConfigStore>(sp =>
+{
+    var path = Path.Combine(dataDir, "model-probes.json");
+    return new JsonFileModelProbeConfigStore(path, sp.GetRequiredService<ILogger<JsonFileModelProbeConfigStore>>());
+});
+builder.Services.AddHostedService<ModelProbeConfigPersistenceHostedService>();
+foreach (var vendorId in new[] { "claude", "gemini", "codex" })
+{
+    builder.Services.AddSingleton<IModelProber>(sp => new FallbackCompositeProber(
+        primary: new CliModelProber(
+            vendorId,
+            () => sp.GetRequiredService<IModelProbeRegistry>().Get(vendorId),
+            sp.GetRequiredService<IModelListParser>(),
+            sp.GetRequiredService<ILogger<CliModelProber>>()),
+        fallback: new LlmFallbackProber(
+            vendorId,
+            sp.GetRequiredService<IProviderOrchestrator>(),
+            sp.GetRequiredService<IModelListParser>(),
+            sp.GetRequiredService<ILogger<LlmFallbackProber>>()),
+        logger: sp.GetRequiredService<ILogger<FallbackCompositeProber>>()));
+}
+builder.Services.AddSingleton<ModelCatalogRefresherOptions>();
+builder.Services.AddSingleton<ModelCatalogRefresher>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<ModelCatalogRefresher>());
+// Event-driven trigger: re-probe a vendor's models whenever its auth state
+// flips from failing to OK. Pairs with Scout's onMutation hook (which
+// triggers on CLI flag/version changes) so the catalog reacts to real
+// signals, not just the 6h timer.
+builder.Services.AddHostedService<UsageStateModelRefreshTrigger>();
 builder.Services.AddSingleton<IGoalDecomposer, LlmGoalDecomposer>();
 builder.Services.AddSingleton<ExpertDirectory>(_ => ExpertDirectory.Default());
+builder.Services.AddSingleton<IExpertRegistry, ExpertRegistry>();
+builder.Services.AddSingleton<IExpertOverrideStore>(sp =>
+{
+    var path = Path.Combine(dataDir, "experts.json");
+    return new JsonFileExpertOverrideStore(path, sp.GetRequiredService<ILogger<JsonFileExpertOverrideStore>>());
+});
+builder.Services.AddHostedService<ExpertOverridePersistenceHostedService>();
 var useLlmAggregator = string.Equals(builder.Configuration["LORDHELM_LLM_SWARM"]
     ?? Environment.GetEnvironmentVariable("LORDHELM_LLM_SWARM"), "true", StringComparison.OrdinalIgnoreCase);
 if (useLlmAggregator)
@@ -174,6 +325,16 @@ builder.Services.AddSingleton<IExpertProvisioner, DefaultExpertProvisioner>();
 builder.Services.AddSingleton<DataflowBus>();
 builder.Services.AddSingleton<IDataflowBus>(sp => sp.GetRequiredService<DataflowBus>());
 builder.Services.AddSingleton<IGoalProgressSink, WidgetGoalProgressSink>();
+builder.Services.AddSingleton<LordHelm.Orchestrator.Consult.IConsultStrategy, LordHelm.Orchestrator.Consult.TieredConsultStrategy>();
+builder.Services.AddSingleton<LordHelm.Orchestrator.Consult.IPanelRunner, LordHelm.Orchestrator.Consult.PanelRunner>();
+builder.Services.AddSingleton<LordHelm.Orchestrator.Cortex.ILordHelmCortex, LordHelm.Orchestrator.Cortex.LordHelmCortex>();
+builder.Services.AddHostedService<LordHelm.Orchestrator.Cortex.CortexAutoPromoteService>();
+builder.Services.AddSingleton<LordHelm.Orchestrator.Cortex.DailyReflectionOverseer>();
+builder.Services.AddSingleton<LordHelm.Orchestrator.Knowledge.KnowledgeOptions>();
+builder.Services.AddSingleton<LordHelm.Orchestrator.Knowledge.IKnowledgeService, LordHelm.Orchestrator.Knowledge.EngramKnowledgeService>();
+builder.Services.AddSingleton<LordHelm.Orchestrator.Chat.IChatRouter, LordHelm.Orchestrator.Chat.LlmChatRouter>();
+builder.Services.AddSingleton<LordHelm.Orchestrator.Chat.SafetyFloor>();
+builder.Services.AddSingleton<LordHelm.Orchestrator.Chat.IChatDispatcher, LordHelm.Orchestrator.Chat.ChatDispatcher>();
 builder.Services.AddSingleton<IGoalRunner, GoalRunner>();
 
 // ---------------------------------------------------------------- overseer agents
@@ -196,7 +357,7 @@ builder.Services.AddSingleton<IReadOnlyList<IPanelVoter>>(sp => new IPanelVoter[
 {
     new CliPanelVoter("claude", sp.GetRequiredService<ClaudeCliModelClient>(), "claude-opus-4-7",  sp.GetRequiredService<ILogger<CliPanelVoter>>()),
     new CliPanelVoter("gemini", sp.GetRequiredService<GeminiCliModelClient>(), "gemini-2.5-pro",   sp.GetRequiredService<ILogger<CliPanelVoter>>()),
-    new CliPanelVoter("codex",  sp.GetRequiredService<CodexCliModelClient>(),  "o4",               sp.GetRequiredService<ILogger<CliPanelVoter>>()),
+    new CliPanelVoter("codex",  sp.GetRequiredService<CodexCliModelClient>(),  "gpt-5.4",          sp.GetRequiredService<ILogger<CliPanelVoter>>()),
 });
 builder.Services.AddSingleton<IConsensusProtocol, DiagnosticPanel>();
 
@@ -221,6 +382,7 @@ app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
 app.MapHelmLogStream();
 app.MapHelmGoalEndpoint();
+app.MapArtifactEndpoint();
 
 app.Run();
 
@@ -239,18 +401,22 @@ public sealed class OverseerBootstrapHostedService : IHostedService
 {
     private readonly LordHelm.Orchestrator.Overseers.OverseerRegistry _registry;
     private readonly LordHelm.Orchestrator.Overseers.DocumentCuratorAgent _documentCurator;
+    private readonly LordHelm.Orchestrator.Cortex.DailyReflectionOverseer _reflection;
 
     public OverseerBootstrapHostedService(
         LordHelm.Orchestrator.Overseers.OverseerRegistry registry,
-        LordHelm.Orchestrator.Overseers.DocumentCuratorAgent documentCurator)
+        LordHelm.Orchestrator.Overseers.DocumentCuratorAgent documentCurator,
+        LordHelm.Orchestrator.Cortex.DailyReflectionOverseer reflection)
     {
         _registry = registry;
         _documentCurator = documentCurator;
+        _reflection = reflection;
     }
 
     public Task StartAsync(CancellationToken ct)
     {
         _registry.Register(_documentCurator, enabledByDefault: true);
+        _registry.Register(_reflection, enabledByDefault: true);
         return Task.CompletedTask;
     }
 
@@ -265,13 +431,15 @@ public sealed class OverseerBootstrapHostedService : IHostedService
 public sealed class SkillStartupLoader : IHostedService
 {
     private readonly ISkillLoader _loader;
+    private readonly ISkillCache _cache;
     private readonly IEngramClient _engram;
     private readonly IWebHostEnvironment _env;
     private readonly ILogger<SkillStartupLoader> _logger;
 
-    public SkillStartupLoader(ISkillLoader loader, IEngramClient engram, IWebHostEnvironment env, ILogger<SkillStartupLoader> logger)
+    public SkillStartupLoader(ISkillLoader loader, ISkillCache cache, IEngramClient engram, IWebHostEnvironment env, ILogger<SkillStartupLoader> logger)
     {
         _loader = loader;
+        _cache = cache;
         _engram = engram;
         _env = env;
         _logger = logger;
@@ -285,16 +453,42 @@ public sealed class SkillStartupLoader : IHostedService
             _logger.LogWarning("skills directory not found: {Dir}", skillsDir);
             return;
         }
+        // Seed upstream skill catalogues on first boot so a fresh install
+        // gets a real library without manual XML authoring:
+        // - claudedirectory.org/skills (30 reasoning skills)
+        // - openai/skills .curated (40 deploy / figma / notion / security skills)
+        // - google-gemini/gemini-skills (4 Gemini SDK skills)
+        // Non-destructive: never overwrites an existing .skill.xml, so
+        // operator edits survive the next startup.
+        try
+        {
+            var claudeSeeded = await LordHelm.Skills.Seeding.ClaudeDirectorySkillSeed.EnsureSeededAsync(skillsDir, ct);
+            if (claudeSeeded.Count > 0)
+                _logger.LogInformation("Seeded {Count} claudedirectory skills", claudeSeeded.Count);
+            var openaiSeeded = await LordHelm.Skills.Seeding.OpenAiCuratedSkillSeed.EnsureSeededAsync(skillsDir, ct);
+            if (openaiSeeded.Count > 0)
+                _logger.LogInformation("Seeded {Count} openai curated skills", openaiSeeded.Count);
+            var geminiSeeded = await LordHelm.Skills.Seeding.GoogleGeminiSkillSeed.EnsureSeededAsync(skillsDir, ct);
+            if (geminiSeeded.Count > 0)
+                _logger.LogInformation("Seeded {Count} google-gemini skills", geminiSeeded.Count);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "upstream skill seed failed; continuing with existing skills only");
+        }
+
+        // LoadDirectoryAsync parses every *.skill.xml once and stores them in
+        // the SQLite cache. We then mirror to engram by iterating the cache
+        // instead of re-parsing files from disk — one parse per manifest.
         var report = await _loader.LoadDirectoryAsync(skillsDir, ct);
         _logger.LogInformation("Skill loader: {New} new, {Skipped} unchanged, {Invalid} invalid of {Total}",
             report.Loaded, report.SkippedUnchanged, report.Invalid.Count, report.TotalFiles);
 
-        foreach (var file in Directory.EnumerateFiles(skillsDir, "*.skill.xml"))
+        var manifests = await _cache.ListAsync(ct);
+        foreach (var manifest in manifests)
         {
             try
             {
-                var manifest = await _loader.LoadFileAsync(file, ct);
-                if (manifest is null) continue;
                 await _engram.StoreAsync(
                     "lord_helm_skills",
                     manifest.Id,
@@ -311,7 +505,7 @@ public sealed class SkillStartupLoader : IHostedService
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "engram mirror failed for {File}", file);
+                _logger.LogWarning(ex, "engram mirror failed for skill {Id}", manifest.Id);
             }
         }
     }
@@ -327,7 +521,23 @@ public sealed class SkillStartupLoader : IHostedService
 public sealed class McpEngramConnector : IHostedService
 {
     private readonly McpEngramClient _client;
-    public McpEngramConnector(McpEngramClient client) { _client = client; }
-    public Task StartAsync(CancellationToken ct) => _client.ConnectAsync(ct);
+    private readonly ILogger<McpEngramConnector> _logger;
+    public McpEngramConnector(McpEngramClient client, ILogger<McpEngramConnector> logger)
+    {
+        _client = client;
+        _logger = logger;
+    }
+    // Fire-and-forget: don't block the hosted-service startup chain on the
+    // MCP handshake (previously up to 30s). Downstream callers already gate
+    // on `_connected` and return gracefully when the client is unavailable.
+    public Task StartAsync(CancellationToken ct)
+    {
+        _ = Task.Run(async () =>
+        {
+            try { await _client.ConnectAsync(ct); }
+            catch (Exception ex) { _logger.LogWarning(ex, "MCP engram connect failed; continuing in unavailable mode"); }
+        }, ct);
+        return Task.CompletedTask;
+    }
     public Task StopAsync(CancellationToken ct) => Task.CompletedTask;
 }

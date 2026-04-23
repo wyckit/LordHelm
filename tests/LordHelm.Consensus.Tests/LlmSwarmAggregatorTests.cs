@@ -21,6 +21,19 @@ public class LlmSwarmAggregatorTests
         }
         public Task<ProviderResponse> GenerateWithFailoverAsync(string _, string? __, string prompt, int ___ = 512, float ____ = 0.1f, CancellationToken ct = default)
             => GenerateAsync(_, __, prompt, ___, ____, ct);
+        public Task<ProviderResponse> GenerateWithFailoverAsync(string _, string? __, string prompt, ProviderTaskHint hint, int ___ = 512, float ____ = 0.1f, CancellationToken ct = default)
+            => GenerateAsync(_, __, prompt, ___, ____, ct);
+    }
+
+    private sealed class NullExpertRegistry : IExpertRegistry
+    {
+        public IReadOnlyList<IExpert> All => Array.Empty<IExpert>();
+        public IExpert? Get(string id) => null;
+        public void Upsert(string personaId, ExpertPolicy policy, ExpertBudget budget) { }
+        public IReadOnlyDictionary<string, (ExpertPolicy Policy, ExpertBudget Budget)> GetOverrides() =>
+            new Dictionary<string, (ExpertPolicy, ExpertBudget)>();
+        public void ReplaceAll(IReadOnlyDictionary<string, (ExpertPolicy Policy, ExpertBudget Budget)> overrides) { }
+        public event Action? OnChanged { add { } remove { } }
     }
 
     private static readonly TaskNode Node = new("t", "audit Foo.cs", Array.Empty<string>(),
@@ -49,7 +62,7 @@ public class LlmSwarmAggregatorTests
     public async Task Single_Member_Short_Circuits_Without_LLM_Call()
     {
         var stub = new StubProviders();
-        var agg = new LlmSwarmAggregator(stub, NullLogger<LlmSwarmAggregator>.Instance);
+        var agg = new LlmSwarmAggregator(stub, new NullExpertRegistry(), NullLogger<LlmSwarmAggregator>.Instance);
         var result = await agg.AggregateAsync(Node, new[] { Members[0] });
         Assert.Equal(Members[0].Output, result);
         Assert.Null(stub.LastPrompt); // never called
@@ -59,7 +72,7 @@ public class LlmSwarmAggregatorTests
     public async Task Merged_Output_Is_Returned_When_LLM_Succeeds()
     {
         var stub = new StubProviders { Response = "# Merged\n- A\n- B" };
-        var agg = new LlmSwarmAggregator(stub, NullLogger<LlmSwarmAggregator>.Instance);
+        var agg = new LlmSwarmAggregator(stub, new NullExpertRegistry(), NullLogger<LlmSwarmAggregator>.Instance);
         var result = await agg.AggregateAsync(Node, Members);
         Assert.Equal("# Merged\n- A\n- B", result);
         Assert.NotNull(stub.LastPrompt);
@@ -70,7 +83,7 @@ public class LlmSwarmAggregatorTests
     public async Task Fallback_To_Concat_On_Provider_Error()
     {
         var stub = new StubProviders { Error = new ErrorRecord("boom", "fail") };
-        var agg = new LlmSwarmAggregator(stub, NullLogger<LlmSwarmAggregator>.Instance);
+        var agg = new LlmSwarmAggregator(stub, new NullExpertRegistry(), NullLogger<LlmSwarmAggregator>.Instance);
         var result = await agg.AggregateAsync(Node, Members);
         // Concat output mentions every persona
         Assert.Contains("code-auditor", result);

@@ -1,0 +1,110 @@
+@*
+    Reusable widget frame from the design handoff. Use this as the outer shell for every
+    dashboard widget so border, head, action buttons, expanded state, and edit-mode overlays
+    stay consistent. Migrations: wrap existing widget body HTML inside <WidgetFrame>.
+
+    Usage:
+        <WidgetFrame Title="Fleet roster" Glyph="⌖" Columns="3" Rows="3"
+                     Expanded="@isExpanded"
+                     OnToggleExpand="() => isExpanded = !isExpanded">
+            ...body markup...
+        </WidgetFrame>
+*@
+
+<div class="widget @(Expanded ? "expanded" : "") @(IsDragTarget ? "widget-dragover" : "")"
+     style="grid-column: span @Columns; grid-row: span @Rows;"
+     draggable="@(EditMode ? "true" : "false")"
+     @ondragstart="OnDragStartInternal"
+     @ondragover="OnDragOverInternal"
+     @ondragover:preventDefault
+     @ondragleave="() => IsDragTarget = false"
+     @ondrop="OnDropInternal"
+     @ondrop:preventDefault>
+    @if (EditMode)
+    {
+        <div class="drag-handle" title="drag to reorder">⋮⋮</div>
+        <button class="remove-handle" title="remove" @onclick="OnRemove">−</button>
+    }
+    <div class="widget-head">
+        <div class="widget-title">
+            @if (!string.IsNullOrEmpty(Glyph))
+            {
+                <span class="widget-glyph">@Glyph</span>
+            }
+            <span>@Title</span>
+            @if (!string.IsNullOrEmpty(Subtitle))
+            {
+                <span style="font-weight:400; text-transform:none; letter-spacing:0; color:var(--fg-3); font-size:11px; margin-left:6px">
+                    @Subtitle
+                </span>
+            }
+        </div>
+        <div class="widget-actions">
+            @HeadActions
+            @if (OnToggleExpand.HasDelegate)
+            {
+                <button @onclick="OnToggleExpand" title="@(Expanded ? "collapse" : "expand")">
+                    @(Expanded ? "⊟" : "⊞")
+                </button>
+            }
+        </div>
+    </div>
+    <div class="widget-body">
+        @ChildContent
+    </div>
+</div>
+
+@code {
+    [Parameter] public string Title { get; set; } = "";
+    [Parameter] public string? Subtitle { get; set; }
+    [Parameter] public string? Glyph { get; set; }
+    [Parameter] public int Columns { get; set; } = 3;
+    [Parameter] public int Rows { get; set; } = 2;
+    [Parameter] public bool Expanded { get; set; }
+    [Parameter] public bool EditMode { get; set; }
+    [Parameter] public EventCallback OnToggleExpand { get; set; }
+    [Parameter] public EventCallback OnRemove { get; set; }
+    [Parameter] public RenderFragment? HeadActions { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    // Drag-to-reorder — only active when EditMode=true. Parent provides a
+    // stable Id (= layout entry id) and a callback invoked with the source
+    // id when a drop completes.
+    [Parameter] public string? DragId { get; set; }
+    [Parameter] public EventCallback<string> OnDropReorder { get; set; }
+
+    private bool IsDragTarget { get; set; }
+
+    private void OnDragStartInternal()
+    {
+        // Source id rides in JavaScript dataTransfer via our JS interop
+        // helper, but Blazor's @ondragstart doesn't surface dataTransfer —
+        // instead the parent grid tracks the 'in-flight' id via a shared
+        // property. Here we just mark this frame as the source by firing
+        // OnDropReorder's companion 'begin' event through DragId.
+        if (!EditMode || string.IsNullOrEmpty(DragId)) return;
+        _dragSource = DragId;
+    }
+
+    private void OnDragOverInternal()
+    {
+        if (!EditMode) return;
+        IsDragTarget = true;
+    }
+
+    private async Task OnDropInternal()
+    {
+        if (!EditMode) { IsDragTarget = false; return; }
+        IsDragTarget = false;
+        if (!string.IsNullOrEmpty(_dragSource) && OnDropReorder.HasDelegate)
+        {
+            await OnDropReorder.InvokeAsync(_dragSource);
+            _dragSource = null;
+        }
+    }
+
+    // Shared across all WidgetFrame instances on the page so one frame's
+    // dragstart is visible to the drop target. Safe because Blazor Server's
+    // per-circuit components run single-threaded.
+    private static string? _dragSource;
+}

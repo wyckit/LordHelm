@@ -20,11 +20,13 @@ public interface ISynthesizer
 public sealed class LlmSynthesizer : ISynthesizer
 {
     private readonly IProviderOrchestrator _providers;
+    private readonly IExpertRegistry _experts;
     private readonly ILogger<LlmSynthesizer> _logger;
 
-    public LlmSynthesizer(IProviderOrchestrator providers, ILogger<LlmSynthesizer> logger)
+    public LlmSynthesizer(IProviderOrchestrator providers, IExpertRegistry experts, ILogger<LlmSynthesizer> logger)
     {
         _providers = providers;
+        _experts = experts;
         _logger = logger;
     }
 
@@ -37,13 +39,34 @@ public sealed class LlmSynthesizer : ISynthesizer
             return req.NodeOutputs.First().Value; // nothing to synthesize; pass through
 
         var prompt = BuildPrompt(req);
+        var contextEstimate = Math.Max(4000, prompt.Length / 4);
+
+        // Prefer the dedicated "synthesiser" expert so the act is mirrored to
+        // its engram namespace (retrospectives + reflection can query it) and
+        // the call is subject to policy/budget/approval like any other expert.
+        // Falls back to the provider orchestrator when the persona isn't
+        // registered — keeps tests that don't set up the expert registry green.
+        var expert = _experts.Get("synthesiser");
+        if (expert is not null)
+        {
+            var act = await expert.ActAsync(new ExpertActRequest(
+                Task: prompt,
+                EstimatedContextTokens: contextEstimate), ct);
+            if (act.Succeeded && !string.IsNullOrWhiteSpace(act.Output))
+                return act.Output.Trim();
+            _logger.LogWarning("Synthesiser expert failed ({Err}); falling back to provider orchestrator.",
+                act.Error ?? "empty");
+        }
+
         var response = await _providers.GenerateWithFailoverAsync(
             preferredVendor: "claude",
             modelOverride: null,
             prompt: prompt,
+            hint: new ProviderTaskHint(TaskKind: "summarisation",
+                EstimatedContextTokens: contextEstimate),
             maxTokens: 1024,
             temperature: 0.1f,
-            ct);
+            ct: ct);
 
         if (response.Error is not null || string.IsNullOrWhiteSpace(response.AssistantMessage))
         {

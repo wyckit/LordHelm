@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.2" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      Web project reference is needed because these tests touch WidgetState,
+      WidgetModel, and DashboardLayoutState which live in LordHelm.Web.
+      Unlike LordHelm.E2E.Tests there's NO Microsoft.AspNetCore.Mvc.Testing
+      dependency here — no Kestrel spin-up, no WebApplicationFactory.
+      These are pure unit tests that happen to need Web types. They go
+      into the spotcheck tier (< 2 min).
+    -->
+    <ProjectReference Include="..\..\src\LordHelm.Web\LordHelm.Web.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -37,6 +37,25 @@ public class ModelCatalogTests
     }
 
     [Fact]
+    public void Resolve_Prefers_Most_Recently_Probed_When_No_Vendor_Hint()
+    {
+        // Auto-resolve used to alphabetise, so `claude-*` always beat `gpt-*`.
+        // The new tie-break is LastProbed desc so a freshly-refreshed vendor
+        // wins over a stale one regardless of ModelId ordering.
+        var cat = new ModelCatalog(seed: Array.Empty<ModelEntry>());
+        var old = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var fresh = DateTimeOffset.UtcNow;
+        cat.Upsert(new ModelEntry("claude", "claude-opus-4-7", ModelTier.Deep, "older", true, old));
+        cat.Upsert(new ModelEntry("codex",  "gpt-5.4",         ModelTier.Deep, "fresh", true, fresh));
+
+        var picked = cat.Resolve(ModelTier.Deep, preferredVendor: null);
+
+        Assert.NotNull(picked);
+        Assert.Equal("codex", picked!.VendorId);
+        Assert.Equal("gpt-5.4", picked.ModelId);
+    }
+
+    [Fact]
     public void MarkAvailability_False_Drops_From_Resolve()
     {
         var cat = new ModelCatalog();

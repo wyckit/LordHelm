@@ -1,0 +1,99 @@
+@*
+    Kind-encoded artifact renderer. Used inside HelmChat bubbles, the deep-dive
+    Results tab, and the ArtifactsWidget. Pre-attentive: each kind has a
+    distinct color + icon so operators recognise the shape before reading.
+    Clicking the title expands a wider preview; binary files get a
+    Download link to /artifacts/{id}.
+*@
+
+<div class="artifact-tile artifact-@Kind" data-redacted="@(Entry.Redacted ? "true" : "false")">
+    <div class="artifact-head">
+        <span class="artifact-glyph">@GlyphFor(Entry.Kind)</span>
+        <span class="artifact-title">@Entry.Title</span>
+        <span class="artifact-meta mono">
+            @Entry.Kind
+            @if (Entry.SizeBytes is { } sz) { <text> · @SizeFor(sz)</text> }
+            @if (!string.IsNullOrEmpty(Entry.Language)) { <text> · @Entry.Language</text> }
+        </span>
+        @if (Entry.Redacted)
+        {
+            <button class="artifact-reveal" @onclick="() => _revealed = !_revealed">@(_revealed ? "hide" : "reveal")</button>
+        }
+        @if (Entry.DiskPath is not null)
+        {
+            <a class="artifact-download" href="@($"/artifacts/{Entry.Id}")" target="_blank" rel="noopener">download</a>
+        }
+    </div>
+
+    @if (Entry.Redacted && !_revealed)
+    {
+        <div class="artifact-redacted">[redacted — click reveal to show]</div>
+    }
+    else
+    {
+        @switch (Entry.Kind)
+        {
+            case LordHelm.Core.ArtifactKind.Markdown:
+            case LordHelm.Core.ArtifactKind.Text:
+            case LordHelm.Core.ArtifactKind.Diff:
+            case LordHelm.Core.ArtifactKind.Json:
+            case LordHelm.Core.ArtifactKind.Code:
+            case LordHelm.Core.ArtifactKind.Table:
+                <pre class="artifact-body mono @(Entry.Kind == LordHelm.Core.ArtifactKind.Diff ? "artifact-diff" : "")">@(_expanded ? Entry.InlineBody : Trunc(Entry.InlineBody))</pre>
+                @if ((Entry.InlineBody?.Length ?? 0) > 400)
+                {
+                    <button class="artifact-expand" @onclick="() => _expanded = !_expanded">
+                        @(_expanded ? "collapse" : "show full")
+                    </button>
+                }
+                break;
+            case LordHelm.Core.ArtifactKind.Link:
+                <a class="artifact-link" href="@Entry.InlineBody" target="_blank" rel="noopener">@Entry.InlineBody</a>
+                break;
+            case LordHelm.Core.ArtifactKind.Image:
+                @if (Entry.DiskPath is not null)
+                {
+                    <img class="artifact-image" src="@($"/artifacts/{Entry.Id}")" alt="@Entry.Title" />
+                }
+                else
+                {
+                    <div class="artifact-body">(image — no disk path)</div>
+                }
+                break;
+            case LordHelm.Core.ArtifactKind.File:
+                <div class="artifact-body mono">@(Entry.InlineBody ?? "binary file — download above")</div>
+                break;
+        }
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public LordHelm.Core.ArtifactEntry Entry { get; set; } = null!;
+    private bool _expanded;
+    private bool _revealed;
+
+    private string Kind => Entry.Kind.ToString().ToLowerInvariant();
+
+    private static string GlyphFor(LordHelm.Core.ArtifactKind k) => k switch
+    {
+        LordHelm.Core.ArtifactKind.Markdown => "¶",
+        LordHelm.Core.ArtifactKind.Text     => "T",
+        LordHelm.Core.ArtifactKind.Diff     => "±",
+        LordHelm.Core.ArtifactKind.Json     => "{}",
+        LordHelm.Core.ArtifactKind.Code     => "‹/›",
+        LordHelm.Core.ArtifactKind.Table    => "▦",
+        LordHelm.Core.ArtifactKind.Link     => "↗",
+        LordHelm.Core.ArtifactKind.Image    => "🖼",
+        LordHelm.Core.ArtifactKind.File     => "⎙",
+        _ => "·",
+    };
+
+    private static string Trunc(string? s) =>
+        string.IsNullOrEmpty(s) ? "" :
+        s.Length <= 400 ? s : s.Substring(0, 400) + "…";
+
+    private static string SizeFor(long bytes) =>
+        bytes < 1024 ? $"{bytes}B" :
+        bytes < 1024 * 1024 ? $"{bytes / 1024.0:0.#}KB" :
+        $"{bytes / 1024.0 / 1024.0:0.##}MB";
+}

@@ -1,0 +1,293 @@
+@page "/diagnostics"
+@rendermode InteractiveServer
+@inject LordHelm.Providers.IProviderOrchestrator Providers
+@inject LordHelm.Providers.IProviderHealth Health
+@inject LordHelm.Providers.Adapters.IAdapterRouter Router
+@inject LordHelm.Orchestrator.IModelCatalog Catalog
+@inject LordHelm.Core.UsageState UsageState
+@inject LordHelm.Orchestrator.Usage.UsageProbeService UsageProbe
+@implements IDisposable
+
+<PageTitle>Lord Helm — Diagnostics</PageTitle>
+
+<header class="helm-header">
+    <h1>Diagnostics <span class="subtitle">figure out why a vendor isn't winning dispatches</span></h1>
+</header>
+
+<section class="mgmt-body">
+    <p class="muted">
+        Three checks: <strong>ping</strong> invokes the CLI with a tiny prompt
+        so you can see if it's answering at all; <strong>state</strong> shows
+        the last probe's auth verdict + subscription exhaustion; <strong>routing
+        scorecard</strong> shows which vendor the <code>AdapterRouter</code>
+        picks for each task kind your dispatcher actually uses.
+    </p>
+
+    <div class="helm-toolbar">
+        <button @onclick="RefreshProbes" disabled="@_busy">re-run auth probes</button>
+        <button @onclick="PingAll" disabled="@_busy">ping every vendor</button>
+        @if (_busy) { <span class="muted">working…</span> }
+    </div>
+
+    <h2 style="margin-top:14px">Per-vendor ping</h2>
+    <table class="mgmt-table">
+        <thead>
+            <tr>
+                <th>Vendor</th>
+                <th>Resolved model</th>
+                <th>AuthOk</th>
+                <th>Exhausted</th>
+                <th>Last probe</th>
+                <th>Ping</th>
+                <th>Result</th>
+            </tr>
+        </thead>
+        <tbody>
+        @foreach (var v in _vendors)
+        {
+            var snap = _snapshots.TryGetValue(v, out var s) ? s : null;
+            var ping = _pings.TryGetValue(v, out var p) ? p : null;
+            var ok = snap?.AuthOk ?? false;
+            <tr class="@(snap?.Exhausted == true ? "vendor-live over-red" : "")">
+                <td><strong>@v</strong></td>
+                <td class="mono">@(snap?.ResolvedModel ?? ResolveDefaultModel(v) ?? "—")</td>
+                <td>@(ok ? "✓" : "✗")</td>
+                <td>@(snap?.Exhausted == true ? "YES" : "no")</td>
+                <td class="mono" style="font-size:10px">
+                    @(snap is null
+                        ? "never"
+                        : $"{Relative(snap.ProbedAt)}{(string.IsNullOrEmpty(snap.Error) ? "" : " · " + Truncate(snap.Error, 40))}")
+                    @if (snap is not null && !string.IsNullOrEmpty(snap.RawOutput))
+                    {
+                        <button class="lh-ghost-btn" style="font-size:9px; margin-left:6px; padding:1px 6px"
+                                @onclick="() => ToggleRaw(v)">@(_showRaw.Contains(v) ? "hide" : "raw")</button>
+                        @if (_showRaw.Contains(v))
+                        {
+                            <pre class="mono" style="font-size:9px; background:rgba(0,0,0,0.3); padding:4px; margin-top:3px; white-space:pre-wrap; max-height:180px; overflow:auto">@snap.RawOutput</pre>
+                        }
+                    }
+                </td>
+                <td><button @onclick="() => Ping(v)" disabled="@_busy">ping</button></td>
+                <td>
+                    @if (ping is null) { <span class="muted">—</span> }
+                    else if (ping.Ok)
+                    {
+                        <span class="pill ok">OK · @ping.DurationMs ms · @ping.TokensIn/@ping.TokensOut tok</span>
+                        <div class="mono" style="font-size:10px; margin-top:3px">@Truncate(ping.Reply, 140)</div>
+                    }
+                    else
+                    {
+                        <span class="pill" style="border-color: var(--incident-1); color: var(--incident-1)">FAIL</span>
+                        <div class="mono" style="font-size:10px; margin-top:3px; color: var(--incident-2)">
+                            @(ping.ErrorCode is null ? "" : "[" + ping.ErrorCode + "] ")@Truncate(ping.ErrorMessage ?? "(no message)", 200)
+                        </div>
+                    }
+                </td>
+            </tr>
+        }
+        </tbody>
+    </table>
+
+    <h2 style="margin-top:14px">Routing scorecard</h2>
+    <p class="muted">
+        For each task kind your dispatcher actually hands the router, who wins.
+        If codex never shows up as #1 for any kind you care about, that's why
+        its request count is low — the router is scoring it behind claude/gemini
+        on every single request it sees.
+    </p>
+    <table class="mgmt-table">
+        <thead>
+            <tr>
+                <th>Task kind</th>
+                <th>#1 (score)</th>
+                <th>#2 (score)</th>
+                <th>#3 (score)</th>
+                <th>Claude rank</th>
+                <th>Gemini rank</th>
+                <th>Codex rank</th>
+            </tr>
+        </thead>
+        <tbody>
+        @foreach (var row in _scoreboard)
+        {
+            <tr>
+                <td class="mono">@row.TaskKind</td>
+                <td class="mono">@row.First</td>
+                <td class="mono">@row.Second</td>
+                <td class="mono">@row.Third</td>
+                <td class="mono" style="color: @(row.ClaudeRank == 1 ? "var(--sandbox-2)" : "")">#@row.ClaudeRank (@row.ClaudeScore)</td>
+                <td class="mono" style="color: @(row.GeminiRank == 1 ? "var(--sandbox-2)" : "")">#@row.GeminiRank (@row.GeminiScore)</td>
+                <td class="mono" style="color: @(row.CodexRank == 1 ? "var(--sandbox-2)" : "var(--incident-1)")">#@row.CodexRank (@row.CodexScore)</td>
+            </tr>
+        }
+        </tbody>
+    </table>
+</section>
+
+@code {
+    private sealed record PingResult(
+        bool Ok, long DurationMs,
+        int TokensIn, int TokensOut,
+        string Reply, string? ErrorCode, string? ErrorMessage);
+
+    private sealed record ScoreRow(
+        string TaskKind, string First, string Second, string Third,
+        int ClaudeRank, string ClaudeScore,
+        int GeminiRank, string GeminiScore,
+        int CodexRank, string CodexScore);
+
+    private IReadOnlyList<string> _vendors = new[] { "claude", "gemini", "codex" };
+    private Dictionary<string, LordHelm.Core.UsageSnapshot> _snapshots = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, PingResult> _pings = new(StringComparer.OrdinalIgnoreCase);
+    private IReadOnlyList<ScoreRow> _scoreboard = Array.Empty<ScoreRow>();
+    private readonly HashSet<string> _showRaw = new(StringComparer.OrdinalIgnoreCase);
+    private void ToggleRaw(string v) { if (!_showRaw.Add(v)) _showRaw.Remove(v); }
+    private bool _busy;
+    private System.Timers.Timer? _poll;
+
+    // Canonical task kinds the dispatcher actually hands the router. Mix in
+    // both the adapter-declared kinds and the generic "chat"/"dispatch" labels
+    // that the LLM router falls back to — that's usually where codex loses.
+    private static readonly string[] _testKinds =
+    {
+        "code", "refactor", "test-gen", "sandbox-exec",
+        "reasoning", "review", "architecture", "docs",
+        "research", "summarisation", "security-review", "long-context",
+        "chat", "dispatch", "decompose", "synthesis",
+    };
+
+    protected override void OnInitialized()
+    {
+        _vendors = Providers.VendorIds.Count > 0
+            ? Providers.VendorIds
+            : new[] { "claude", "gemini", "codex" };
+        RefreshSnapshots();
+        BuildScoreboard();
+        UsageState.OnChanged += HandleUsageChanged;
+        Catalog.OnChanged += HandleCatalogChanged;
+        _poll = new System.Timers.Timer(2000) { AutoReset = true };
+        _poll.Elapsed += (_, __) => { RefreshSnapshots(); InvokeAsync(StateHasChanged); };
+        _poll.Start();
+    }
+
+    private void HandleUsageChanged() { RefreshSnapshots(); InvokeAsync(StateHasChanged); }
+    private void HandleCatalogChanged() { BuildScoreboard(); InvokeAsync(StateHasChanged); }
+
+    private void RefreshSnapshots() =>
+        _snapshots = UsageState.Snapshot().ToDictionary(
+            kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase);
+
+    private string? ResolveDefaultModel(string vendor) =>
+        Catalog.Resolve(LordHelm.Orchestrator.ModelTier.Fast, vendor)?.ModelId;
+
+    private void BuildScoreboard()
+    {
+        var rows = new List<ScoreRow>();
+        foreach (var kind in _testKinds)
+        {
+            var req = new LordHelm.Providers.Adapters.RoutingRequest(
+                TaskKind: kind, EstimatedContextTokens: 2_000,
+                NeedsToolCalls: false,
+                PreferredMode: LordHelm.Core.ResourceMode.Interactive);
+            var ranked = Router.Rank(req);
+            var first  = ranked.ElementAtOrDefault(0);
+            var second = ranked.ElementAtOrDefault(1);
+            var third  = ranked.ElementAtOrDefault(2);
+            rows.Add(new ScoreRow(
+                TaskKind: kind,
+                First:  first  is null ? "—" : $"{first.VendorId} ({first.Total:0.00})",
+                Second: second is null ? "—" : $"{second.VendorId} ({second.Total:0.00})",
+                Third:  third  is null ? "—" : $"{third.VendorId} ({third.Total:0.00})",
+                ClaudeRank: RankOf("claude", ranked), ClaudeScore: ScoreOf("claude", ranked),
+                GeminiRank: RankOf("gemini", ranked), GeminiScore: ScoreOf("gemini", ranked),
+                CodexRank:  RankOf("codex",  ranked), CodexScore:  ScoreOf("codex",  ranked)));
+        }
+        _scoreboard = rows;
+    }
+
+    private static int RankOf(string vendor, IReadOnlyList<LordHelm.Providers.Adapters.AdapterRoutingScore> ranked)
+    {
+        for (int i = 0; i < ranked.Count; i++)
+            if (string.Equals(ranked[i].VendorId, vendor, StringComparison.OrdinalIgnoreCase))
+                return i + 1;
+        return 99;
+    }
+
+    private static string ScoreOf(string vendor, IReadOnlyList<LordHelm.Providers.Adapters.AdapterRoutingScore> ranked)
+    {
+        var s = ranked.FirstOrDefault(r => string.Equals(r.VendorId, vendor, StringComparison.OrdinalIgnoreCase));
+        return s is null ? "—" : s.Total.ToString("0.00");
+    }
+
+    private async Task Ping(string vendor)
+    {
+        _busy = true; StateHasChanged();
+        try
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var resp = await Providers.GenerateAsync(
+                vendorId: vendor,
+                modelOverride: null,
+                prompt: "Reply with only the single word: pong",
+                maxTokens: 16,
+                temperature: 0.0f);
+            sw.Stop();
+            if (resp.Error is not null)
+            {
+                _pings[vendor] = new PingResult(
+                    Ok: false, DurationMs: sw.ElapsedMilliseconds,
+                    TokensIn: resp.Usage.InputTokens, TokensOut: resp.Usage.OutputTokens,
+                    Reply: resp.AssistantMessage ?? "",
+                    ErrorCode: resp.Error.Code, ErrorMessage: resp.Error.Message);
+            }
+            else
+            {
+                _pings[vendor] = new PingResult(
+                    Ok: true, DurationMs: sw.ElapsedMilliseconds,
+                    TokensIn: resp.Usage.InputTokens, TokensOut: resp.Usage.OutputTokens,
+                    Reply: resp.AssistantMessage ?? "(empty)",
+                    ErrorCode: null, ErrorMessage: null);
+            }
+        }
+        catch (Exception ex)
+        {
+            _pings[vendor] = new PingResult(
+                Ok: false, DurationMs: 0, TokensIn: 0, TokensOut: 0,
+                Reply: "", ErrorCode: ex.GetType().Name, ErrorMessage: ex.Message);
+        }
+        finally { _busy = false; StateHasChanged(); }
+    }
+
+    private async Task PingAll()
+    {
+        _busy = true; StateHasChanged();
+        try { foreach (var v in _vendors) await Ping(v); }
+        finally { _busy = false; StateHasChanged(); }
+    }
+
+    private async Task RefreshProbes()
+    {
+        _busy = true; StateHasChanged();
+        try { await UsageProbe.RefreshAllAsync(); }
+        finally { _busy = false; RefreshSnapshots(); StateHasChanged(); }
+    }
+
+    private static string Truncate(string s, int max) =>
+        s.Length <= max ? s : s.Substring(0, max) + "…";
+
+    private static string Relative(DateTimeOffset at)
+    {
+        var d = DateTimeOffset.UtcNow - at;
+        if (d.TotalSeconds < 60) return $"{(int)d.TotalSeconds}s ago";
+        if (d.TotalMinutes < 60) return $"{(int)d.TotalMinutes}m ago";
+        if (d.TotalHours < 24)   return $"{(int)d.TotalHours}h ago";
+        return at.ToLocalTime().ToString("MM-dd HH:mm");
+    }
+
+    public void Dispose()
+    {
+        _poll?.Stop(); _poll?.Dispose();
+        UsageState.OnChanged -= HandleUsageChanged;
+        Catalog.OnChanged -= HandleCatalogChanged;
+    }
+}

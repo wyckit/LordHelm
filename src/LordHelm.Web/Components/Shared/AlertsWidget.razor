@@ -1,0 +1,72 @@
+@*
+    Alerts widget — reads unread + recent alerts from IAlertTray and renders
+    them in the design-handoff row shape: coloured tag-box with level symbol
+    inside, title + mono meta, relative time on the right.
+*@
+@inject LordHelm.Core.IAlertTray Tray
+@implements IDisposable
+
+<div class="alerts-list">
+    @foreach (var a in _alerts)
+    {
+        var level = LevelFor(a);
+        <div class="alerts-row @(a.Read ? "alerts-row-read" : "")">
+            <span class="alerts-tag alerts-tag-@level">@SymbolFor(level)</span>
+            <div class="alerts-row-body">
+                <div class="alerts-title">@a.Title</div>
+                <div class="alerts-meta mono">@a.Source@(string.IsNullOrEmpty(a.Body) ? "" : " · " + a.Body)</div>
+            </div>
+            <span class="alerts-ago mono">@Relative(a.At)</span>
+        </div>
+    }
+    @if (_alerts.Count == 0)
+    {
+        <div class="alerts-empty">no alerts</div>
+    }
+</div>
+
+@code {
+    private List<LordHelm.Core.AlertEntry> _alerts = new();
+
+    protected override void OnInitialized()
+    {
+        Refresh();
+        Tray.OnChanged += Handle;
+    }
+
+    private void Handle()
+    {
+        Refresh();
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void Refresh() => _alerts = Tray.All().OrderByDescending(a => a.At).Take(8).ToList();
+
+    private static string LevelFor(LordHelm.Core.AlertEntry a) => a.Kind switch
+    {
+        LordHelm.Core.AlertKind.Error      => "err",
+        LordHelm.Core.AlertKind.Warning    => "warn",
+        LordHelm.Core.AlertKind.Attention  => "warn",
+        LordHelm.Core.AlertKind.DoneForNow => "ok",
+        _ => "info",
+    };
+
+    private static string SymbolFor(string level) => level switch
+    {
+        "err"  => "!",
+        "warn" => "△",
+        "ok"   => "✓",
+        _      => "i",
+    };
+
+    private static string Relative(DateTimeOffset at)
+    {
+        var d = DateTimeOffset.UtcNow - at;
+        if (d.TotalSeconds < 60) return $"{(int)d.TotalSeconds}s";
+        if (d.TotalMinutes < 60) return $"{(int)d.TotalMinutes}m";
+        if (d.TotalHours < 24)   return $"{(int)d.TotalHours}h";
+        return $"{(int)d.TotalDays}d";
+    }
+
+    public void Dispose() => Tray.OnChanged -= Handle;
+}

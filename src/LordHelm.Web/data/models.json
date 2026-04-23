@@ -1,0 +1,149 @@
+{
+  "models": [
+    {
+      "vendorId": "claude",
+      "modelId": "claude-haiku-4-5",
+      "tier": "Fast",
+      "description": "Fast, cost-efficient small model for low-latency tasks and sub-agent work",
+      "isAvailable": true,
+      "lastProbed": "2026-04-22T21:27:42.580978+00:00"
+    },
+    {
+      "vendorId": "claude",
+      "modelId": "claude-opus-4-7",
+      "tier": "Deep",
+      "description": "Most capable Claude model, optimized for coding, complex reasoning, and agentic tasks",
+      "isAvailable": true,
+      "lastProbed": "2026-04-22T21:27:42.580978+00:00"
+    },
+    {
+      "vendorId": "claude",
+      "modelId": "claude-sonnet-4-6",
+      "tier": "Deep",
+      "description": "Balanced frontier model for high-throughput coding and agent workflows",
+      "isAvailable": true,
+      "lastProbed": "2026-04-22T21:27:42.580978+00:00"
+    },
+    {
+      "vendorId": "codex",
+      "modelId": "codex-mini-latest",
+      "tier": "Fast",
+      "description": "Fast reasoning model optimized for the Codex CLI.",
+      "isAvailable": true,
+      "lastProbed": "2026-04-22T22:04:24.3817079+00:00"
+    },
+    {
+      "vendorId": "codex",
+      "modelId": "gpt-5.1-codex-mini",
+      "tier": "Fast",
+      "description": "Smaller, more cost-effective, less-capable version of GPT-5.1-Codex.",
+      "isAvailable": true,
+      "lastProbed": "2026-04-22T22:04:24.3817079+00:00"
+    },
+    {
+      "vendorId": "codex",
+      "modelId": "gpt-5.4-mini",
+      "tier": "Fast",
+      "description": "Strongest mini model for coding, computer use, and subagents.",
+      "isAvailable": true,
+      "lastProbed": "2026-04-22T22:04:24.3817079+00:00"
+    },
+    {
+      "vendorId": "codex",
+      "modelId": "gpt-5.1-codex-max",
+      "tier": "Deep",
+      "description": "Version of GPT-5.1-Codex optimized for long running tasks.",
+      "isAvailable": true,
+      "lastProbed": "2026-04-22T22:04:24.3817079+00:00"
+    },
+    {
+      "vendorId": "codex",
+      "modelId": "gpt-5.4",
+      "tier": "Deep",
+      "description": "Best intelligence at scale for agentic, coding, and professional workflows.",
+      "isAvailable": true,
+      "lastProbed": "2026-04-22T22:04:24.3817079+00:00"
+    },
+    {
+      "vendorId": "codex",
+      "modelId": "gpt-5-codex",
+      "tier": "Code",
+      "description": "Version of GPT-5 optimized for agentic coding in Codex.",
+      "isAvailable": true,
+      "lastProbed": "2026-04-22T22:04:24.3817079+00:00"
+    },
+    {
+      "vendorId": "codex",
+      "modelId": "gpt-5.1-codex",
+      "tier": "Code",
+      "description": "Version of GPT-5.1 optimized for agentic coding in Codex.",
+      "isAvailable": true,
+      "lastProbed": "2026-04-22T22:04:24.3817079+00:00"
+    },
+    {
+      "vendorId": "codex",
+      "modelId": "gpt-5.2-codex",
+      "tier": "Code",
+      "description": "Most intelligent coding model optimized for long-horizon, agentic coding tasks.",
+      "isAvailable": true,
+      "lastProbed": "2026-04-22T22:04:24.3817079+00:00"
+    },
+    {
+      "vendorId": "codex",
+      "modelId": "gpt-5.3-codex",
+      "tier": "Code",
+      "description": "Most capable agentic coding model to date.",
+      "isAvailable": true,
+      "lastProbed": "2026-04-22T22:04:24.3817079+00:00"
+    },
+    {
+      "vendorId": "codex",
+      "modelId": "gpt-5.3-codex-spark",
+      "tier": "Code",
+      "description": "Ultra-fast model for real-time coding in Codex.",
+      "isAvailable": true,
+      "lastProbed": "2026-04-22T22:04:24.3817079+00:00"
+    },
+    {
+      "vendorId": "gemini",
+      "modelId": "auto-gemini-2.5",
+      "tier": "Fast",
+      "description": "Auto (Gemini 2.5)",
+      "isAvailable": true,
+      "lastProbed": "2026-04-22T22:04:24.381634+00:00"
+    },
+    {
+      "vendorId": "gemini",
+      "modelId": "gemini-2.5-flash-lite",
+      "tier": "Fast",
+      "description": "8. auto-gemini-3 Auto (Gemini 3)",
+      "isAvailable": true,
+      "lastProbed": "2026-04-22T22:04:24.381634+00:00"
+    },
+    {
+      "vendorId": "gemini",
+      "modelId": "gemini-2.5-pro",
+      "tier": "Fast",
+      "description": "6. gemini-2.5-flash",
+      "isAvailable": true,
+      "lastProbed": "2026-04-22T22:04:24.381634+00:00"
+    },
+    {
+      "vendorId": "gemini",
+      "modelId": "gemini-3-pro-preview",
+      "tier": "Fast",
+      "description": "4. gemini-3-flash-preview",
+      "isAvailable": true,
+      "lastProbed": "2026-04-22T22:04:24.381634+00:00"
+    },
+    {
+      "vendorId": "gemini",
+      "modelId": "gemini-3.1-flash-lite-preview",
+      "tier": "Fast",
+      "description": "2. gemini-3.1-pro-preview",
+      "isAvailable": true,
+      "lastProbed": "2026-04-22T22:04:24.381634+00:00"
+    }
+  ],
+  "mcpTools": []
+}

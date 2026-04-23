@@ -18,7 +18,11 @@ public sealed record TaskNode(
     string? Skill = null,
     string? PreferredVendor = null,
     int SwarmSize = 1,
-    SwarmStrategy SwarmStrategy = SwarmStrategy.Single);
+    SwarmStrategy SwarmStrategy = SwarmStrategy.Single,
+    string? TaskKind = null,
+    int EstimatedContextTokens = 2000,
+    bool NeedsToolCalls = false,
+    string? ModelHint = null);
 
 public static class TaskDag
 {

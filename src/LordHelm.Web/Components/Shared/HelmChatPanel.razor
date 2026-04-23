@@ -1,0 +1,427 @@
+@*
+    Orchestrating panel — unified command surface. Owns vendor/tier/model
+    selection, seeds them from the persisted HelmPreference, threads the
+    explicit model override through every dispatch, and hosts the
+    resolved-model banner + layout admin buttons inline. There is no
+    separate throne-status band under this panel anymore — it's all here.
+*@
+@inject LordHelm.Orchestrator.IExpertRegistry Experts
+@inject LordHelm.Orchestrator.Chat.IChatDispatcher Dispatcher
+@inject LordHelm.Orchestrator.Artifacts.IArtifactStore ArtifactStore
+@inject LordHelm.Orchestrator.HelmPreferenceState Preference
+@inject LordHelm.Orchestrator.IModelCatalog Catalog
+@inject LordHelm.Orchestrator.Knowledge.IKnowledgeService Knowledge
+@inject LordHelm.Web.WidgetState WidgetState
+@inject LordHelm.Web.Layout.DashboardLayoutState Layout
+@inject LordHelm.Execution.ApprovalGate ApprovalGate
+@inject IJSRuntime JS
+@implements IDisposable
+
+<div class="hud-shell @(_pendingApprovals.Count > 0 ? "has-approvals" : "")">
+    @if (_pendingApprovals.Count > 0)
+    {
+        <div class="hud-approval-gate">
+            <div class="hud-approval-bar">
+                <span class="hud-approval-icon">⚠</span>
+                <span class="hud-approval-label">
+                    @(_pendingApprovals.Count == 1 ? "APPROVAL REQUIRED" : $"{_pendingApprovals.Count} APPROVALS REQUIRED")
+                </span>
+                <span class="hud-approval-hint">awaiting your decision before dispatch continues</span>
+            </div>
+            @foreach (var pending in _pendingApprovals)
+            {
+                var req = pending.PendingApproval!.Request;
+                <div class="hud-approval-card">
+                    <div class="hud-approval-summary">@req.Summary</div>
+                    @if (!string.IsNullOrWhiteSpace(req.DiffPreview))
+                    {
+                        <pre class="hud-preview">@TruncatePreview(req.DiffPreview)</pre>
+                    }
+                    <div class="hud-approval-actions">
+                        <button class="hud-btn hud-btn-ok"  @onclick="() => Approve(pending)">approve</button>
+                        <button class="hud-btn hud-btn-err" @onclick="() => Deny(pending)">deny</button>
+                        <span class="hud-approval-meta">@req.RiskTier · @req.SkillId</span>
+                    </div>
+                </div>
+            }
+        </div>
+    }
+
+    <Throne Input="@_input" InputChanged="v => _input = v"
+            SelectedTier="@_selectedTier"    SelectedTierChanged="HandleTierChanged"
+            SelectedVendor="@_selectedVendor" SelectedVendorChanged="HandleVendorChanged"
+            SelectedModel="@_selectedModel"   SelectedModelChanged="HandleModelChanged"
+            ThinkingEnabled="@_thinking"      ThinkingEnabledChanged="v => { _thinking = v; StateHasChanged(); }"
+            Submitting="@_typing"
+            AgentCount="@AgentCount"
+            OnSubmit="SubmitInput"
+            OnQuickAction="Send" />
+
+    <div class="hud-telemetry">
+        <span class="hud-t-label">resolved</span>
+        <code class="hud-t-value">@(ResolvedModel() ?? "—")</code>
+        @if (Layout.CurrentPresetKey is not null)
+        {
+            <span class="hud-t-sep">·</span>
+            <span class="hud-t-label">preset</span>
+            <code class="hud-t-value">@Layout.CurrentPresetKey</code>
+        }
+        <span class="hud-t-spacer"></span>
+        <div class="hud-kebab-wrap">
+            <button class="hud-kebab" @onclick="ToggleKebab" title="Layout actions">···</button>
+            @if (_kebabOpen)
+            {
+                <div class="hud-kebab-menu" @onmouseleave="() => _kebabOpen = false">
+                    @if (OnToggleEdit.HasDelegate)
+                    {
+                        <button @onclick="() => { _kebabOpen = false; OnToggleEdit.InvokeAsync(); }">@(EditMode ? "done editing" : "edit layout")</button>
+                    }
+                    @if (OnRestoreDefault.HasDelegate)
+                    {
+                        <button @onclick="() => { _kebabOpen = false; OnRestoreDefault.InvokeAsync(); }">restore default</button>
+                    }
+                    @if (OnSpawnDemo.HasDelegate)
+                    {
+                        <button @onclick="() => { _kebabOpen = false; OnSpawnDemo.InvokeAsync(); }">+ spawn thread</button>
+                    }
+                    @if (OnClearCompleted.HasDelegate)
+                    {
+                        <button @onclick="() => { _kebabOpen = false; OnClearCompleted.InvokeAsync(); }">clear done</button>
+                    }
+                </div>
+            }
+        </div>
+    </div>
+
+    <div class="hud-stream">
+        @foreach (var m in _messages)
+        {
+            @if (m.PlanSummary is not null)
+            {
+                <div class="hud-line hud-line-plan">
+                    <span class="hud-rail">◇</span>
+                    <div class="hud-body">@m.PlanSummary</div>
+                </div>
+                continue;
+            }
+            <div class="hud-line @(m.IsUser ? "hud-line-user" : "hud-line-helm")">
+                <span class="hud-rail">@(m.IsUser ? "❯" : "◆")</span>
+                <div class="hud-body">
+                    <div class="hud-text">@m.Body</div>
+                    @if (m.Artifacts is { Count: > 0 })
+                    {
+                        <div class="hud-artifacts">
+                            @foreach (var a in m.Artifacts)
+                            {
+                                <ArtifactTile Entry="a" />
+                            }
+                        </div>
+                    }
+                </div>
+            </div>
+        }
+        @if (_typing)
+        {
+            <div class="hud-line hud-line-helm">
+                <span class="hud-rail pulsing">◆</span>
+                <div class="hud-body">
+                    <span class="hud-dots"><span></span><span></span><span></span></span>
+                </div>
+            </div>
+        }
+        @* approvals render as a dedicated gate above the input —
+           the operator should never have to scroll to find them. *@
+    </div>
+</div>
+
+@code {
+    [Parameter] public int AgentCount { get; set; }
+    [Parameter] public bool EditMode { get; set; }
+    [Parameter] public EventCallback OnToggleEdit { get; set; }
+    [Parameter] public EventCallback OnRestoreDefault { get; set; }
+    [Parameter] public EventCallback OnSpawnDemo { get; set; }
+    [Parameter] public EventCallback OnClearCompleted { get; set; }
+
+    private sealed record Msg(
+        bool IsUser,
+        string Body,
+        IReadOnlyList<LordHelm.Core.ArtifactEntry>? Artifacts = null,
+        string? PlanSummary = null);
+
+    private readonly List<Msg> _messages = new()
+    {
+        new(false, "Standing by. Issue a command, or pick a quick-action below."),
+    };
+    private string _input = "";
+    private bool _typing;
+    private readonly string _sessionId = "chat-" + Guid.NewGuid().ToString("N")[..10];
+    private IReadOnlyList<LordHelm.Web.WidgetModel> _pendingApprovals = Array.Empty<LordHelm.Web.WidgetModel>();
+
+    // Dispatch context — seeded from HelmPreference on init, mutated by Throne
+    // selects and `/helm use` commands. This is the authoritative source for
+    // every ChatDispatchRequest the panel fires.
+    private string _selectedVendor = "";
+    private string _selectedTier   = "Deep";
+    private string _selectedModel  = "";
+    private bool   _thinking       = false;
+    private bool   _kebabOpen      = false;
+    private void   ToggleKebab()   => _kebabOpen = !_kebabOpen;
+
+    protected override void OnInitialized()
+    {
+        var p = Preference.Current;
+        _selectedVendor = p.PrimaryVendor ?? "";
+        _selectedTier   = string.IsNullOrEmpty(p.PrimaryTier) ? "Deep" : p.PrimaryTier;
+        _selectedModel  = p.PrimaryModel ?? "";
+        _thinking       = p.ThinkingEnabled;
+
+        WidgetState.OnChanged += HandleWidgetChanged;
+        Preference.OnChanged += HandlePrefChanged;
+        Layout.OnChanged += HandleLayoutChanged;
+        RefreshApprovals();
+    }
+
+    private void HandlePrefChanged()
+    {
+        var p = Preference.Current;
+        _selectedVendor = p.PrimaryVendor ?? "";
+        _selectedTier   = string.IsNullOrEmpty(p.PrimaryTier) ? "Deep" : p.PrimaryTier;
+        _selectedModel  = p.PrimaryModel ?? "";
+        _thinking       = p.ThinkingEnabled;
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void HandleLayoutChanged() => InvokeAsync(StateHasChanged);
+
+    private void HandleVendorChanged(string v) { _selectedVendor = v; _selectedModel = ""; StateHasChanged(); }
+    private void HandleTierChanged(string v)   { _selectedTier = v; StateHasChanged(); }
+    private void HandleModelChanged(string v)
+    {
+        _selectedModel = v;
+        // If the operator picked a specific model but left vendor=auto, derive
+        // the vendor from the catalog so dispatch lands on the right CLI.
+        if (!string.IsNullOrEmpty(v) && string.IsNullOrEmpty(_selectedVendor))
+        {
+            var owner = Catalog.GetModels().FirstOrDefault(m =>
+                string.Equals(m.ModelId, v, StringComparison.OrdinalIgnoreCase));
+            if (owner is not null) _selectedVendor = owner.VendorId;
+        }
+        StateHasChanged();
+    }
+
+    private string? ResolvedModel()
+    {
+        if (!string.IsNullOrEmpty(_selectedModel)) return _selectedModel;
+        if (!Enum.TryParse<LordHelm.Orchestrator.ModelTier>(_selectedTier, true, out var tier))
+            tier = LordHelm.Orchestrator.ModelTier.Deep;
+        var preferred = string.IsNullOrEmpty(_selectedVendor) ? null : _selectedVendor;
+        return Catalog.Resolve(tier, preferred)?.ModelId;
+    }
+
+    private void HandleWidgetChanged()
+    {
+        RefreshApprovals();
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void RefreshApprovals()
+    {
+        _pendingApprovals = WidgetState.Snapshot()
+            .Where(w => w.Kind == LordHelm.Web.WidgetKind.Approval &&
+                        w.PendingApproval is not null &&
+                        string.Equals(w.PendingApproval.Request.SessionId, _sessionId,
+                            StringComparison.OrdinalIgnoreCase))
+            .OrderBy(w => w.UpdatedAt)
+            .ToList();
+    }
+
+    private void Approve(LordHelm.Web.WidgetModel w) =>
+        WidgetState.ResolveApproval(w.Id, true,  "operator approved via chat", ApprovalGate);
+    private void Deny(LordHelm.Web.WidgetModel w) =>
+        WidgetState.ResolveApproval(w.Id, false, "operator denied via chat",   ApprovalGate);
+
+    private static string TruncatePreview(string s) =>
+        s.Length <= 260 ? s : s.Substring(0, 260) + "…";
+
+    public void Dispose()
+    {
+        WidgetState.OnChanged -= HandleWidgetChanged;
+        Preference.OnChanged -= HandlePrefChanged;
+        Layout.OnChanged -= HandleLayoutChanged;
+    }
+
+    private async Task SubmitInput()
+    {
+        if (string.IsNullOrWhiteSpace(_input)) return;
+        var text = _input.Trim();
+        _input = "";
+        await Send(text);
+    }
+
+    private async Task Send(string text)
+    {
+        _messages.Add(new Msg(true, text));
+        _typing = true;
+        StateHasChanged();
+        try
+        {
+            if (await TryHandleKnowCommandAsync(text)) return;
+            if (TryHandleHelmCommand(text, out var reply))
+            {
+                _messages.Add(new Msg(false, reply));
+                return;
+            }
+            var recent = _messages
+                .Where(m => m.PlanSummary is null)
+                .Select(m => (m.IsUser ? "USER: " : "HELM: ") + m.Body)
+                .ToList();
+            var before = ArtifactStore.Recent(200).Select(a => a.Id).ToHashSet();
+            WidgetState.StartChatGoal(_sessionId, text);
+
+            // Thread the operator's explicit model through — the dispatcher
+            // honours it and forces the matching adapter, so picking
+            // `gpt-5.4-mini` in the Throne actually dispatches to codex and
+            // not whatever the tier would have resolved by default.
+            var explicitModel = string.IsNullOrEmpty(_selectedModel) ? null : _selectedModel;
+            var explicitVendor = string.IsNullOrEmpty(_selectedVendor) ? null : _selectedVendor;
+            var disp = await Dispatcher.DispatchAsync(new LordHelm.Orchestrator.Chat.ChatDispatchRequest(
+                Text: text, SessionId: _sessionId, RecentConversation: recent,
+                ExplicitVendor: explicitVendor,
+                ExplicitTier: _selectedTier,
+                ExplicitModel: explicitModel,
+                SkipRouter: explicitVendor is not null || explicitModel is not null,
+                Thinking: _thinking));
+
+            _messages.Add(new Msg(false, "", PlanSummary: SummarisePlan(disp.Plan)));
+            StateHasChanged();
+
+            if (disp.Halted)
+            {
+                _messages.Add(new Msg(false, disp.ReplyText));
+                WidgetState.CompleteChatGoal(_sessionId, succeeded: true, reply: disp.ReplyText);
+                return;
+            }
+
+            var newArtifacts = ArtifactStore.Recent(200)
+                .Where(a => !before.Contains(a.Id))
+                .OrderByDescending(a => a.ProducedAt)
+                .Take(8)
+                .ToList();
+
+            // Surface goal failures explicitly so a silent provider error /
+            // exhausted vendor / missing CLI doesn't look like a normal reply.
+            // Previously ReplyText was rendered as-is and the operator had no
+            // signal that dispatch didn't land.
+            var succeeded = disp.GoalResult?.Succeeded ?? true;
+            var detail = disp.GoalResult?.ErrorDetail;
+            var body = succeeded
+                ? disp.ReplyText
+                : $"⚠ dispatch failed" +
+                  (string.IsNullOrWhiteSpace(detail) ? "" : $"\n\n**error:** {detail}") +
+                  (string.IsNullOrWhiteSpace(disp.ReplyText) ? "" : $"\n\n**partial reply:** {disp.ReplyText}");
+            _messages.Add(new Msg(false, body, newArtifacts));
+            WidgetState.CompleteChatGoal(_sessionId, succeeded: succeeded, reply: body);
+        }
+        catch (Exception ex)
+        {
+            _messages.Add(new Msg(false, $"(error: {ex.Message})"));
+        }
+        finally
+        {
+            _typing = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task<bool> TryHandleKnowCommandAsync(string text)
+    {
+        var trimmed = text.Trim();
+        string? topic = null;
+        if (trimmed.StartsWith("/helm know ", StringComparison.OrdinalIgnoreCase))
+            topic = trimmed.Substring("/helm know ".Length).Trim();
+        else if (trimmed.StartsWith("/know ", StringComparison.OrdinalIgnoreCase))
+            topic = trimmed.Substring("/know ".Length).Trim();
+
+        if (string.IsNullOrWhiteSpace(topic)) return false;
+
+        var result = await Knowledge.RecallOrResearchAsync(topic);
+        var header = result.Source switch
+        {
+            LordHelm.Orchestrator.Knowledge.KnowledgeSource.Engram =>
+                "✦ engram recall",
+            LordHelm.Orchestrator.Knowledge.KnowledgeSource.Research =>
+                $"⚙ researched via **{result.VendorUsed}**" +
+                (result.ModelUsed is null ? "" : $" (`{result.ModelUsed}`)") +
+                (result.StoredNodeId is null ? " · not persisted" : $" · stored `{result.StoredNodeId}`"),
+            _ => "⚠ knowledge lookup failed",
+        };
+        _messages.Add(new Msg(false, header + "\n\n" + result.Answer));
+        return true;
+    }
+
+    private bool TryHandleHelmCommand(string text, out string reply)
+    {
+        reply = "";
+        var trimmed = text.Trim();
+        if (!trimmed.StartsWith("/helm", StringComparison.OrdinalIgnoreCase)) return false;
+        var parts = trimmed.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        if (parts.Length == 1 || (parts.Length >= 2 && parts[1].Equals("show", StringComparison.OrdinalIgnoreCase)))
+        {
+            var p = Preference.Current;
+            var vendorLabel = string.IsNullOrEmpty(p.PrimaryVendor) ? "(none — router picks)" : $"**{p.PrimaryVendor}**";
+            reply = $"Primary CLI: {vendorLabel}" +
+                    (p.PrimaryModel is null ? "" : $" · model `{p.PrimaryModel}`") +
+                    $" · tier `{p.PrimaryTier}`";
+            return true;
+        }
+
+        if (parts[1].Equals("reset", StringComparison.OrdinalIgnoreCase))
+        {
+            Preference.Set(new LordHelm.Orchestrator.HelmPreference());
+            reply = "Primary CLI reset — no vendor selected. Pick one in the orchestration panel or run `/helm use {vendor}`.";
+            return true;
+        }
+
+        if (parts[1].Equals("use", StringComparison.OrdinalIgnoreCase) && parts.Length >= 3)
+        {
+            var vendor = parts[2].ToLowerInvariant();
+            var known = new[] { "claude", "gemini", "codex" };
+            if (!known.Contains(vendor))
+            {
+                reply = $"Unknown vendor `{vendor}`. Known: {string.Join(", ", known)}.";
+                return true;
+            }
+            string? model = parts.Length >= 4 ? parts[3] : null;
+            if (model is not null)
+            {
+                var known_models = Catalog.GetModels(vendor).Select(m => m.ModelId).ToList();
+                if (!known_models.Contains(model, StringComparer.OrdinalIgnoreCase))
+                {
+                    reply = $"Model `{model}` not registered for `{vendor}`. Available: " +
+                            string.Join(", ", known_models);
+                    return true;
+                }
+            }
+            Preference.SetPrimary(vendor, model);
+            reply = $"Primary CLI set to **{vendor}**" +
+                    (model is null ? "" : $" · model `{model}`") + ".";
+            return true;
+        }
+
+        reply = "Usage: `/helm use {vendor} [{model}]`, `/helm show`, `/helm reset`, `/helm know {topic}`.";
+        return true;
+    }
+
+    private static string SummarisePlan(LordHelm.Orchestrator.Chat.ChatRoutingPlan plan)
+    {
+        var parts = new List<string> { plan.Kind.ToString() };
+        if (plan.PersonaHints.Count > 0)
+            parts.Add("personas: " + string.Join(", ", plan.PersonaHints));
+        if (!string.IsNullOrEmpty(plan.Tier))       parts.Add("tier: " + plan.Tier);
+        if (!string.IsNullOrEmpty(plan.ModelHint))  parts.Add("model: " + plan.ModelHint);
+        if (plan.NeedsPanel) parts.Add($"panel×{plan.PanelSize}");
+        if (plan.RiskTier is not null) parts.Add("risk: " + plan.RiskTier);
+        return "➜ " + string.Join(" · ", parts) + (string.IsNullOrEmpty(plan.Rationale) ? "" : "\n" + plan.Rationale);
+    }
+}

@@ -1,0 +1,95 @@
+@*
+    Gantt timeline — 1-hour window, ticks every 10 minutes. Each row renders
+    a widget's recent activity: 'started' at UpdatedAt - elapsed, 'now' at
+    UpdatedAt. Working widgets get a swept gradient; failed get err colour;
+    completed get 40%-alpha hue. A vertical teal 'now' line spans the track.
+*@
+@inject LordHelm.Web.WidgetState State
+@implements IDisposable
+
+<div class="gantt-root">
+    <div class="gantt-ticks mono">
+        @for (int m = 60; m >= 0; m -= 10)
+        {
+            <span class="gantt-tick">@(m == 0 ? "now" : $"−{m}m")</span>
+        }
+    </div>
+    <div class="gantt-rows">
+        @foreach (var w in _rows)
+        {
+            var seg = ComputeSegment(w);
+            <div class="gantt-row">
+                <div class="gantt-label" title="@w.Label">@TruncLabel(w.Label)</div>
+                <div class="gantt-track">
+                    <div class="gantt-seg gantt-seg-@ColorFor(w)"
+                         style="left:@seg.Left%; width:@seg.Width%">
+                        @if (w.BucketOf() == "Running")
+                        {
+                            <div class="gantt-sweep"></div>
+                        }
+                    </div>
+                </div>
+            </div>
+        }
+        @if (_rows.Count == 0)
+        {
+            <div class="gantt-empty">no activity in the last hour</div>
+        }
+        <div class="gantt-now-line"></div>
+    </div>
+</div>
+
+@code {
+    private IReadOnlyList<LordHelm.Web.WidgetModel> _rows = Array.Empty<LordHelm.Web.WidgetModel>();
+    private System.Timers.Timer? _timer;
+
+    protected override void OnInitialized()
+    {
+        Refresh();
+        State.OnChanged += Handle;
+        _timer = new System.Timers.Timer(3000) { AutoReset = true };
+        _timer.Elapsed += (_, __) => { Refresh(); InvokeAsync(StateHasChanged); };
+        _timer.Start();
+    }
+
+    private void Handle() { Refresh(); InvokeAsync(StateHasChanged); }
+
+    private void Refresh()
+    {
+        var cutoff = DateTimeOffset.UtcNow.AddHours(-1);
+        _rows = State.Snapshot()
+            .Where(w => w.UpdatedAt >= cutoff)
+            .OrderByDescending(w => w.UpdatedAt)
+            .Take(8)
+            .ToList();
+    }
+
+    private sealed record Segment(double Left, double Width);
+
+    // Compute left+width as percentages of the 60-minute window.
+    // We don't track task-start times on WidgetModel, so use a synthetic 5m
+    // running duration for Running widgets, 2m for Completed/Failed.
+    private static Segment ComputeSegment(LordHelm.Web.WidgetModel w)
+    {
+        var now  = DateTimeOffset.UtcNow;
+        var ageMin = Math.Max(0, (now - w.UpdatedAt).TotalMinutes);
+        var durMin = w.BucketOf() == "Running" ? 5.0 : 2.0;
+        var leftPct  = Math.Clamp((60 - ageMin - durMin) / 60.0 * 100, 0, 100);
+        var widthPct = Math.Clamp(durMin / 60.0 * 100, 1, 100 - leftPct);
+        return new Segment(leftPct, widthPct);
+    }
+
+    private static string ColorFor(LordHelm.Web.WidgetModel w) => w.BucketOf() switch
+    {
+        "Running"   => "running",
+        "Completed" => "ok",
+        "Failed"    => "err",
+        "Approval"  => "warn",
+        "Incident"  => "err",
+        _ => "idle",
+    };
+
+    private static string TruncLabel(string s) => s.Length <= 24 ? s : s.Substring(0, 22) + "…";
+
+    public void Dispose() { State.OnChanged -= Handle; _timer?.Stop(); _timer?.Dispose(); }
+}

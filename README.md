@@ -76,11 +76,16 @@ Clean build produces **0 errors, 0 warnings** from Lord Helm's own code. A narro
 
 ## Test
 
-```bash
-dotnet test LordHelm.slnx
-```
+Tests are split into two tiers to keep the inner loop fast:
 
-Current suite: **41 tests, all green** across `LordHelm.Skills.Tests` (24), `LordHelm.Execution.Tests` (14), and `LordHelm.Consensus.Tests` (3).
+| Tier | Command | Budget | Covers |
+|---|---|---|---|
+| **spotcheck** (default after every change) | `pwsh scripts/spotcheck.ps1` (or `./scripts/spotcheck.sh`) | ≤ 2 min | fast unit suites — Consensus / Skills / Execution / Core / Web.UnitTests |
+| **full** (overnight / pre-release) | `pwsh scripts/full-test.ps1` (or `./scripts/full-test.sh`) | unbounded | entire solution including `LordHelm.E2E.Tests` (Kestrel + WebApplicationFactory) |
+
+Convention: any new test under 100 ms lands in the spotcheck tier by default. Tests that need `LordHelm.Web` types (`WidgetState`, `DashboardLayoutState`, etc.) but don't spin up Kestrel go in `LordHelm.Web.UnitTests`. Only tests that spin up Kestrel via `WebApplicationFactory`, hit real MCP transport, or exceed a few seconds go in `LordHelm.E2E.Tests` and run only via the full-test script.
+
+Raw invocation still works: `dotnet test LordHelm.slnx` runs everything.
 
 ## Run
 

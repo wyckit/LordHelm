@@ -1,0 +1,184 @@
+@page "/routing"
+@rendermode InteractiveServer
+@inject LordHelm.Providers.Adapters.IAdapterRouter Router
+@inject LordHelm.Providers.Adapters.IAgentAdapterRegistry Registry
+@inject LordHelm.Providers.Adapters.IRouterWeights Weights
+
+<PageTitle>Lord Helm — Routing Diagnostics</PageTitle>
+
+<header class="helm-header">
+    <h1>Routing diagnostics <span class="subtitle">score breakdown for a hypothetical request</span></h1>
+</header>
+
+<section class="mgmt-body">
+    <p class="muted">
+        Every <code>IExpert.ActAsync</code> call builds a <code>RoutingRequest</code>
+        and asks the <code>AdapterRouter</code> to pick a vendor. This page runs
+        the same scoring function against inputs you provide — the numbers below
+        are what the router actually computes. Totals use the panel-endorsed
+        weights (0.30 capability · 0.20 recent-success · 0.10 × five others).
+    </p>
+
+    <div class="new-model-form">
+        <label>Task kind
+            <input type="text" @bind="taskKind" placeholder="code | reasoning | research | summarisation | refactor" />
+        </label>
+        <label>Context (tokens)
+            <input type="number" min="0" step="1000" @bind="contextTokens" />
+        </label>
+        <label>Needs tool calls
+            <select @bind="needsTools">
+                <option value="false">no</option>
+                <option value="true">yes</option>
+            </select>
+        </label>
+        <label>Preferred mode
+            <select @bind="preferredMode">
+                <option value="Interactive">interactive</option>
+                <option value="Builder">builder</option>
+                <option value="Batch">batch</option>
+            </select>
+        </label>
+        <label>Pinned vendor (optional)
+            <input type="text" @bind="pinnedVendor" placeholder="leave blank for unpinned" />
+        </label>
+        <label class="full">Max USD/call (optional)
+            <input type="number" min="0" step="0.01" @bind="maxUsd" />
+        </label>
+    </div>
+    <div class="helm-toolbar" style="margin-top:8px">
+        <button @onclick="Rank">rank</button>
+    </div>
+
+    <h2 style="margin-top:14px">Scoring weights <span class="subtitle">persisted to <code>data/routing-weights.json</code></span></h2>
+    <div class="new-model-form">
+        <label>capability_match <input type="number" min="0" step="0.01" @bind="wCap" /></label>
+        <label>recent_success   <input type="number" min="0" step="0.01" @bind="wSucc" /></label>
+        <label>latency_fit      <input type="number" min="0" step="0.01" @bind="wLat" /></label>
+        <label>cost_fit         <input type="number" min="0" step="0.01" @bind="wCost" /></label>
+        <label>context_fit      <input type="number" min="0" step="0.01" @bind="wCtx" /></label>
+        <label>tool_fit         <input type="number" min="0" step="0.01" @bind="wTool" /></label>
+        <label>resource_fit     <input type="number" min="0" step="0.01" @bind="wRes" /></label>
+    </div>
+    <div class="helm-toolbar" style="margin-top:6px">
+        <span class="muted" style="font-size:10px">sum: @((wCap+wSucc+wLat+wCost+wCtx+wTool+wRes).ToString("0.00"))</span>
+        <button @onclick="SaveWeights">save weights</button>
+        <button @onclick="ResetWeights">reset to defaults</button>
+    </div>
+
+    @if (scores.Count > 0)
+    {
+        <h2 style="margin-top:14px">Ranked breakdown</h2>
+        <table class="mgmt-table">
+            <thead>
+                <tr>
+                    <th>#</th><th>Vendor</th>
+                    <th title="capability_match · 0.30">cap</th>
+                    <th title="recent_success · 0.20">succ</th>
+                    <th title="latency_fit · 0.10">lat</th>
+                    <th title="cost_fit · 0.10">cost</th>
+                    <th title="context_fit · 0.10">ctx</th>
+                    <th title="tool_fit · 0.10">tool</th>
+                    <th title="resource_fit · 0.10">res</th>
+                    <th>total</th>
+                </tr>
+            </thead>
+            <tbody>
+            @for (int i = 0; i < scores.Count; i++)
+            {
+                var s = scores[i];
+                var isTop = i == 0;
+                <tr style="@(isTop ? "background: rgba(80, 200, 120, 0.06)" : "")">
+                    <td>@(i + 1)</td>
+                    <td><strong>@s.VendorId</strong>@(isTop ? " ★" : "")</td>
+                    <td class="mono">@s.CapabilityMatch.ToString("0.00")</td>
+                    <td class="mono">@s.RecentSuccess.ToString("0.00")</td>
+                    <td class="mono">@s.LatencyFit.ToString("0.00")</td>
+                    <td class="mono">@s.CostFit.ToString("0.00")</td>
+                    <td class="mono">@s.ContextFit.ToString("0.00")</td>
+                    <td class="mono">@s.ToolFit.ToString("0.00")</td>
+                    <td class="mono">@s.ResourceFit.ToString("0.00")</td>
+                    <td class="mono"><strong>@s.Total.ToString("0.000")</strong></td>
+                </tr>
+            }
+            </tbody>
+        </table>
+
+        <h2 style="margin-top:14px">Capabilities snapshot</h2>
+        <table class="mgmt-table">
+            <thead>
+                <tr><th>Vendor</th><th>Tasks</th><th>Ctx</th><th>Mode</th><th>Tools</th><th>Success EMA</th></tr>
+            </thead>
+            <tbody>
+            @foreach (var a in Registry.All)
+            {
+                var h = a.Health;
+                <tr>
+                    <td><strong>@a.VendorId</strong></td>
+                    <td class="muted" style="font-size:10px">@string.Join(", ", a.Capabilities.SupportedTasks)</td>
+                    <td class="mono">@a.Capabilities.MaxContextTokens.ToString("N0")</td>
+                    <td>@a.Capabilities.Mode</td>
+                    <td>@(a.Capabilities.SupportsToolCalls ? "yes" : "no")</td>
+                    <td class="mono">@((int)Math.Round(h.RecentSuccessRate * 100))%</td>
+                </tr>
+            }
+            </tbody>
+        </table>
+    }
+</section>
+
+@code {
+    private string taskKind = "reasoning";
+    private int contextTokens = 10_000;
+    private string needsTools = "false";
+    private string preferredMode = "Interactive";
+    private string pinnedVendor = string.Empty;
+    private decimal maxUsd = 0m;
+
+    private List<LordHelm.Providers.Adapters.AdapterRoutingScore> scores = new();
+    private double wCap, wSucc, wLat, wCost, wCtx, wTool, wRes;
+
+    protected override void OnInitialized()
+    {
+        LoadWeights();
+        Rank();
+    }
+
+    private void LoadWeights()
+    {
+        var w = Weights.Current;
+        wCap = w.CapabilityMatch; wSucc = w.RecentSuccess;
+        wLat = w.LatencyFit; wCost = w.CostFit; wCtx = w.ContextFit;
+        wTool = w.ToolFit; wRes = w.ResourceFit;
+    }
+
+    private void SaveWeights()
+    {
+        Weights.Replace(new LordHelm.Providers.Adapters.RouterWeights(
+            CapabilityMatch: wCap, RecentSuccess: wSucc,
+            LatencyFit: wLat, CostFit: wCost,
+            ContextFit: wCtx, ToolFit: wTool, ResourceFit: wRes));
+        Rank();
+    }
+
+    private void ResetWeights()
+    {
+        Weights.Replace(LordHelm.Providers.Adapters.RouterWeights.Default);
+        LoadWeights();
+        Rank();
+    }
+
+    private void Rank()
+    {
+        var mode = Enum.TryParse<LordHelm.Core.ResourceMode>(preferredMode, true, out var m)
+            ? m : LordHelm.Core.ResourceMode.Interactive;
+        var req = new LordHelm.Providers.Adapters.RoutingRequest(
+            TaskKind: string.IsNullOrWhiteSpace(taskKind) ? "reasoning" : taskKind.Trim(),
+            EstimatedContextTokens: contextTokens,
+            NeedsToolCalls: string.Equals(needsTools, "true", StringComparison.OrdinalIgnoreCase),
+            PreferredMode: mode,
+            MaxCostPerCallUsd: maxUsd > 0 ? maxUsd : null);
+        var pin = string.IsNullOrWhiteSpace(pinnedVendor) ? null : pinnedVendor.Trim();
+        scores = Router.Rank(req, pin).ToList();
+    }
+}

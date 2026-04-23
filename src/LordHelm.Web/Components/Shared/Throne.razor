@@ -1,0 +1,290 @@
+@*
+    Throne — the central Lord Helm command input. Renders inside the
+    orchestration panel (was previously standalone). Vendor/tier selects
+    bind to the persisted HelmPreference so "primary CLI" sticks across
+    reloads; the model dropdown fills from IModelCatalog.GetModels(vendor)
+    so operators pick from the CLI's ACTUAL current models, not a hardcoded
+    list.
+
+    Design-handoff parity: see design_handoff_lord_helm/dashboard.jsx (Throne fn).
+*@
+@inject LordHelm.Orchestrator.HelmPreferenceState Preference
+@inject LordHelm.Orchestrator.IModelCatalog Catalog
+@inject LordHelm.Providers.IProviderHealth Health
+@implements IDisposable
+
+<div class="hud-command @(focused ? "focused" : "") @(Submitting ? "dispatching" : "")">
+    <div class="hud-scanline"></div>
+
+    <div class="hud-statusline">
+        <span class="hud-crest">♛</span>
+        <span class="hud-title">LORD HELM</span>
+        <span class="hud-pip @(Submitting || _liveCalls > 0 ? "working" : "ready")"></span>
+        <span class="hud-status-text">
+            @(_liveCalls > 0 ? "DISPATCHING" : (Submitting ? "DISPATCHING" : "ORCHESTRATING"))
+        </span>
+        <span class="hud-status-sep">·</span>
+        @foreach (var v in _vendorsLive)
+        {
+            <span class="hud-vendor-live @(v.InFlight > 0 ? "active" : "idle") @(v.Exhausted ? "exhausted" : "")"
+                  title="@v.VendorId — @v.InFlight in-flight · @v.SubscriptionRequests total">
+                <span class="hud-vendor-pip"></span>
+                <span class="hud-vendor-name">@v.VendorId</span>
+                <span class="hud-vendor-count">@v.InFlight</span>
+            </span>
+        }
+    </div>
+
+    <form @onsubmit="OnFormSubmit" @onsubmit:preventDefault class="hud-form">
+        <div class="hud-input-row">
+            <span class="hud-prompt">❯</span>
+            <input type="text"
+                   value="@Input"
+                   @oninput="OnInput"
+                   @onfocus="() => focused = true"
+                   @onblur="() => focused = false"
+                   placeholder="@(focused || !string.IsNullOrEmpty(Input) ? "" : $"command your fleet — \"{_examples[_exIdx]}\"")"
+                   class="hud-input"
+                   autocomplete="off"
+                   spellcheck="false" />
+            <kbd class="hud-kbd">@(OperatingSystem.IsMacOS() ? "⌘K" : "Ctrl+K")</kbd>
+            <button type="submit" class="hud-dispatch"
+                    disabled="@(string.IsNullOrWhiteSpace(Input) || Submitting)"
+                    title="Dispatch">
+                @if (Submitting) { <span class="hud-orb pulsing"></span> }
+                else { <span class="hud-orb"></span> }
+            </button>
+        </div>
+
+        <div class="hud-context">
+            <span class="hud-ctx-label">vendor</span>
+            <select class="hud-select" value="@SelectedVendor" @onchange="OnVendorChanged">
+                <option value="">auto</option>
+                <option value="claude">claude</option>
+                <option value="gemini">gemini</option>
+                <option value="codex">codex</option>
+            </select>
+            @if (_availableModels.Count > 0)
+            {
+                <span class="hud-ctx-sep">›</span>
+                <span class="hud-ctx-label">model</span>
+                <select class="hud-select" value="@SelectedModel" @onchange="OnModelChanged">
+                    <option value="">auto</option>
+                    @foreach (var m in _availableModels)
+                    {
+                        <option value="@m.ModelId">@m.ModelId</option>
+                    }
+                </select>
+            }
+            @if (SupportsThinking(SelectedModel))
+            {
+                <span class="hud-ctx-sep">›</span>
+                <label class="hud-toggle" title="Extended reasoning">
+                    <input type="checkbox" checked="@ThinkingEnabled" @onchange="OnThinkingChanged" />
+                    <span>thinking</span>
+                </label>
+            }
+        </div>
+    </form>
+
+    @if (string.IsNullOrEmpty(Input) && !Submitting)
+    {
+        <div class="hud-chips">
+            @foreach (var s in _quickActions)
+            {
+                <button class="hud-chip" @onclick="() => OnQuickAction.InvokeAsync(s)">@s</button>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public string Input { get; set; } = "";
+    [Parameter] public EventCallback<string> InputChanged { get; set; }
+    [Parameter] public string SelectedTier { get; set; } = "Deep";
+    [Parameter] public EventCallback<string> SelectedTierChanged { get; set; }
+    [Parameter] public string SelectedVendor { get; set; } = "";
+    [Parameter] public EventCallback<string> SelectedVendorChanged { get; set; }
+    [Parameter] public string SelectedModel { get; set; } = "";
+    [Parameter] public EventCallback<string> SelectedModelChanged { get; set; }
+    [Parameter] public bool ThinkingEnabled { get; set; }
+    [Parameter] public EventCallback<bool> ThinkingEnabledChanged { get; set; }
+    [Parameter] public bool Submitting { get; set; }
+    [Parameter] public int AgentCount { get; set; }
+    [Parameter] public EventCallback OnSubmit { get; set; }
+    [Parameter] public EventCallback<string> OnQuickAction { get; set; }
+
+    private bool focused;
+    private int _exIdx;
+    private IReadOnlyList<LordHelm.Orchestrator.ModelEntry> _availableModels = Array.Empty<LordHelm.Orchestrator.ModelEntry>();
+    // Live per-vendor CLI activity — pulled from IProviderHealth (which in
+    // turn aggregates RateLimitGovernor.InFlight per adapter). This is the
+    // REAL subprocess count per vendor, not a proxy via widget state.
+    private IReadOnlyList<LordHelm.Providers.VendorHealth> _vendorsLive = Array.Empty<LordHelm.Providers.VendorHealth>();
+    private int _liveCalls;
+    private static readonly string[] _examples =
+    {
+        "Pause all ops agents",
+        "Summarize today's PRs",
+        "Who's waiting on approval?",
+        "Show me spend this week",
+        "Generate dashboard for incident view",
+    };
+    private static readonly string[] _quickActions =
+    {
+        "Generate dashboard for incident view",
+        "Focus on code agents",
+        "What changed overnight?",
+        "Optimize fleet",
+    };
+    private System.Timers.Timer? _rotator;
+
+    protected override void OnInitialized()
+    {
+        // Seed selects from persisted preference — so "primary CLI" sticks.
+        var p = Preference.Current;
+        if (string.IsNullOrEmpty(SelectedVendor)) SelectedVendor = p.PrimaryVendor;
+        if (string.IsNullOrEmpty(SelectedTier))   SelectedTier   = p.PrimaryTier;
+        SelectedModel = p.PrimaryModel ?? "";
+        ThinkingEnabled = p.ThinkingEnabled;
+        RefreshAvailableModels();
+        Preference.OnChanged += HandlePrefChanged;
+        Catalog.OnChanged += HandleCatalogChanged;
+
+        RefreshLiveCalls();
+
+        // Single timer serves two purposes: cycle the placeholder examples
+        // every ~2.8s AND repoll live per-vendor call counts each tick.
+        // 2.8s is cheap enough that the in-flight indicator feels reactive
+        // without spamming Health.GetAll.
+        _rotator = new System.Timers.Timer(2800) { AutoReset = true };
+        _rotator.Elapsed += (_, __) =>
+        {
+            _exIdx = (_exIdx + 1) % _examples.Length;
+            RefreshLiveCalls();
+            InvokeAsync(StateHasChanged);
+        };
+        _rotator.Start();
+    }
+
+    private void RefreshLiveCalls()
+    {
+        try
+        {
+            _vendorsLive = Health.GetAll();
+            _liveCalls = _vendorsLive.Sum(v => v.InFlight);
+        }
+        catch
+        {
+            _vendorsLive = Array.Empty<LordHelm.Providers.VendorHealth>();
+            _liveCalls = 0;
+        }
+    }
+
+    private async Task OnInput(ChangeEventArgs e)
+    {
+        Input = e.Value?.ToString() ?? "";
+        if (InputChanged.HasDelegate) await InputChanged.InvokeAsync(Input);
+    }
+
+    private async Task OnFormSubmit()
+    {
+        if (!string.IsNullOrWhiteSpace(Input) && OnSubmit.HasDelegate)
+            await OnSubmit.InvokeAsync();
+    }
+
+    private async Task OnVendorChanged(ChangeEventArgs e)
+    {
+        var vendor = e.Value?.ToString() ?? "";
+        SelectedVendor = vendor;
+        if (SelectedVendorChanged.HasDelegate) await SelectedVendorChanged.InvokeAsync(vendor);
+        if (!string.IsNullOrEmpty(vendor))
+            Preference.SetPrimary(vendor, model: null, tier: SelectedTier);
+        SelectedModel = "";
+        if (SelectedModelChanged.HasDelegate) await SelectedModelChanged.InvokeAsync("");
+        RefreshAvailableModels();
+    }
+
+    // Kept as a no-op so any upstream bindings that still reference it
+    // don't break; the tier dropdown itself is gone from the UI.
+    private Task OnTierChanged(ChangeEventArgs _) => Task.CompletedTask;
+
+    private async Task OnModelChanged(ChangeEventArgs e)
+    {
+        SelectedModel = e.Value?.ToString() ?? "";
+        if (SelectedModelChanged.HasDelegate) await SelectedModelChanged.InvokeAsync(SelectedModel);
+        // Derive the tier from the selected model's catalog entry so backend
+        // resolution (when model override is empty) still has a tier signal.
+        var derivedTier = !string.IsNullOrEmpty(SelectedModel)
+            ? Catalog.GetModels(SelectedVendor).FirstOrDefault(m =>
+                string.Equals(m.ModelId, SelectedModel, StringComparison.OrdinalIgnoreCase))?.Tier.ToString()
+            : null;
+        if (derivedTier is not null)
+        {
+            SelectedTier = derivedTier;
+            if (SelectedTierChanged.HasDelegate) await SelectedTierChanged.InvokeAsync(derivedTier);
+        }
+        if (!string.IsNullOrEmpty(SelectedVendor))
+            Preference.SetPrimary(SelectedVendor,
+                model: string.IsNullOrEmpty(SelectedModel) ? null : SelectedModel,
+                tier: derivedTier ?? SelectedTier);
+        // If the new model doesn't support thinking, clear the toggle so
+        // the dispatch doesn't carry a meaningless flag forward.
+        if (ThinkingEnabled && !SupportsThinking(SelectedModel))
+        {
+            ThinkingEnabled = false;
+            if (ThinkingEnabledChanged.HasDelegate) await ThinkingEnabledChanged.InvokeAsync(false);
+        }
+    }
+
+    private async Task OnThinkingChanged(ChangeEventArgs e)
+    {
+        var v = e.Value is bool b ? b : bool.TryParse(e.Value?.ToString(), out var x) && x;
+        ThinkingEnabled = v;
+        if (ThinkingEnabledChanged.HasDelegate) await ThinkingEnabledChanged.InvokeAsync(v);
+        if (!string.IsNullOrEmpty(SelectedVendor))
+            Preference.SetPrimary(SelectedVendor, model: SelectedModel, tier: SelectedTier, thinking: v);
+    }
+
+    // Heuristic: model supports extended thinking / reasoning mode if its id
+    // matches known reasoning-capable families. Kept as a substring match so
+    // new preview variants light up automatically (e.g. gemini-3.1-pro-preview).
+    private static bool SupportsThinking(string? modelId)
+    {
+        if (string.IsNullOrEmpty(modelId)) return false;
+        var id = modelId.ToLowerInvariant();
+        return id.Contains("opus") || id.Contains("sonnet") ||
+               id.Contains("codex-max") || id.Contains("reasoning") ||
+               id.Contains("2.5-pro") || id.Contains("3.1-pro") ||
+               id.Contains("3-pro") || id.Contains("gpt-5.4") ||
+               id.Contains("gpt-5.2") || id.Contains("gpt-5.3");
+    }
+
+    private void RefreshAvailableModels()
+    {
+        _availableModels = string.IsNullOrEmpty(SelectedVendor)
+            ? Array.Empty<LordHelm.Orchestrator.ModelEntry>()
+            : Catalog.GetModels(SelectedVendor).Where(m => m.IsAvailable).ToList();
+    }
+
+    private void HandlePrefChanged()
+    {
+        var p = Preference.Current;
+        SelectedVendor = p.PrimaryVendor;
+        SelectedTier = p.PrimaryTier;
+        SelectedModel = p.PrimaryModel ?? "";
+        ThinkingEnabled = p.ThinkingEnabled;
+        RefreshAvailableModels();
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void HandleCatalogChanged() { RefreshAvailableModels(); InvokeAsync(StateHasChanged); }
+
+    public void Dispose()
+    {
+        _rotator?.Stop();
+        _rotator?.Dispose();
+        Preference.OnChanged -= HandlePrefChanged;
+        Catalog.OnChanged -= HandleCatalogChanged;
+    }
+}

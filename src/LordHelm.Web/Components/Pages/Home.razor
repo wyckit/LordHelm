@@ -5,49 +5,40 @@
 @inject IJSRuntime JS
 @inject LordHelm.Execution.ApprovalGate ApprovalGate
 @inject LordHelm.Orchestrator.IGoalRunner GoalRunner
+@inject LordHelm.Orchestrator.Chat.IChatDispatcher Dispatcher
 @inject LordHelm.Orchestrator.IModelCatalog ModelCatalog
+@inject LordHelm.Orchestrator.HelmPreferenceState Preference
+@inject LordHelm.Web.Layout.DashboardLayoutState Layout
+@inject LordHelm.Web.Layout.LayoutPresetResolver Presets
 @inject NavigationManager Nav
 @inject ILogger<Home> Logger
 
 <PageTitle>Lord Helm Command Center</PageTitle>
 
-<header class="helm-header">
-    <h1>Lord Helm <span class="subtitle">command center</span></h1>
-    <div class="legend">
-        <span class="chip host">HOST</span>
-        <span class="chip sandbox">SANDBOX</span>
-        <span class="chip incident">INCIDENT</span>
-    </div>
-    <div class="helm-toolbar">
-        <button @onclick="AddDemoWidget" title="Spawn a simulated expert thread">+ spawn</button>
-        <button @onclick="ClearCompleted" title="Remove completed + failed widgets">clear done</button>
-        <button @onclick="ResetLayout" title="Forget saved widget layout">reset layout</button>
-    </div>
-</header>
+@* Unified orchestration panel — throne composer + resolved-model banner +
+   layout admin buttons + conversation history + inline approvals all in
+   one surface, always visible at the top. No external status strip. *@
+<HelmChatPanel AgentCount="@(widgets.Count(w => w.BucketOf() == "Running"))"
+               EditMode="@editMode"
+               OnToggleEdit="ToggleEditMode"
+               OnRestoreDefault="RestoreDefault"
+               OnSpawnDemo="AddDemoWidget"
+               OnClearCompleted="ClearCompleted" />
 
-<div class="goal-bar">
-    <form @onsubmit="SubmitGoal" @onsubmit:preventDefault>
-        <input type="text" @bind="goalText" @bind:event="oninput" placeholder="submit a goal — e.g. 'summarise the README'" />
-        <select @bind="selectedTier" title="Model tier">
-            <option value="Deep">deep</option>
-            <option value="Fast">fast</option>
-            <option value="Code">code</option>
-        </select>
-        <select @bind="selectedVendor" title="Preferred vendor">
-            <option value="">auto vendor</option>
-            <option value="claude">claude</option>
-            <option value="gemini">gemini</option>
-            <option value="codex">codex</option>
-        </select>
-        <button type="submit" disabled="@(string.IsNullOrWhiteSpace(goalText) || goalInFlight)">@(goalInFlight ? "dispatching..." : "dispatch")</button>
-    </form>
-    <div class="goal-status">
-        resolved model: <code>@(ResolveModelPreview() ?? "(none)")</code>
-        @if (!string.IsNullOrEmpty(lastGoalStatus))
-        {
-            <span> — @lastGoalStatus</span>
-        }
-    </div>
+<div class="widget-grid @(editMode ? "edit-mode" : "")">
+    @foreach (var e in _layout)
+    {
+        <WidgetFrame Title="@TitleFor(e.Id)"
+                     Subtitle="@SubtitleFor(e.Id)"
+                     Glyph="@GlyphFor(e.Id)"
+                     Columns="@e.Columns"
+                     Rows="@e.Rows"
+                     EditMode="@editMode"
+                     DragId="@e.Id"
+                     OnDropReorder="(src) => HandleDrop(src, e.Id)">
+            @WidgetFor(e.Id)
+        </WidgetFrame>
+    }
 </div>
 
 <div class="status-summary">
@@ -72,67 +63,82 @@
 {
     var items = WidgetsIn(bucket.Key);
     if (items.Count == 0) continue;
+    var collapsed = IsCollapsed(bucket.Key);
 
-    <section class="status-group status-group-@bucket.Key.ToLowerInvariant()">
-        <header class="group-head">
+    <section class="status-group status-group-@bucket.Key.ToLowerInvariant() @(collapsed ? "collapsed" : "")">
+        <header class="group-head" @onclick="() => ToggleCollapsed(bucket.Key)" style="cursor:pointer" title="Click to @(collapsed ? "expand" : "collapse")">
+            <span class="group-chevron">@(collapsed ? "▶" : "▼")</span>
             <span class="group-icon">@bucket.Icon</span>
             <span class="group-label">@bucket.Label</span>
             <span class="group-count">@items.Count</span>
             <span class="group-blurb">@bucket.Description</span>
+            @if (bucket.Key is "Completed" or "Failed")
+            {
+                <button class="lh-ghost-btn group-clear"
+                        @onclick="() => ClearBucket(bucket.Key)"
+                        @onclick:stopPropagation
+                        title="Remove all @bucket.Label items">clear</button>
+            }
         </header>
-        <div class="group-body">
+        @if (!collapsed)
+        {
+        <div class="widget-grid status-group-grid">
             @foreach (var w in items)
             {
-                <div class="widget-card @CssFor(w) @(w.NeedsAttention() ? "needs-attention" : "")">
-                    <div class="widget-head">
-                        <span class="icon">@IconFor(w)</span>
-                        <span class="label" title="@w.Label">@w.Label</span>
-                        <span class="status">@w.Status</span>
-                        <button class="expand-btn" @onclick="() => Expand(w)" title="Expand log">[ ]</button>
-                    </div>
-                    <div class="widget-body">
-                        @if (w.Tail is { Count: > 0 })
-                        {
-                            <pre class="log">@RenderTail(w.Tail.TakeLast(10))</pre>
-                        }
-                        else
-                        {
-                            <div class="placeholder">waiting for output...</div>
-                        }
-                        @if (w.Kind == LordHelm.Web.WidgetKind.Approval && w.PendingApproval is not null)
-                        {
-                            <div class="approval-actions">
-                                <button class="approve" @onclick="() => Approve(w)">approve</button>
-                                <button class="deny" @onclick="() => Deny(w)">deny</button>
+                <WidgetFrame Title="@w.Label"
+                             Subtitle="@w.Status"
+                             Glyph="@IconFor(w)"
+                             Columns="@ColumnsFor(w)"
+                             Rows="2">
+                    <HeadActions>
+                        <button class="lh-hue-@HueFor(w)" @onclick="() => Expand(w)" title="Expand log">⊞</button>
+                    </HeadActions>
+                    <ChildContent>
+                        <div class="widget-tile-body @CssFor(w) @(w.NeedsAttention() ? "needs-attention" : "")">
+                            @if (w.Tail is { Count: > 0 })
+                            {
+                                <pre class="log mono">@RenderTail(w.Tail.TakeLast(10))</pre>
+                            }
+                            else
+                            {
+                                <div class="placeholder">waiting for output...</div>
+                            }
+                            @if (w.Kind == LordHelm.Web.WidgetKind.Approval && w.PendingApproval is not null)
+                            {
+                                <div class="approval-actions">
+                                    <button class="approve" @onclick="() => Approve(w)">approve</button>
+                                    <button class="deny" @onclick="() => Deny(w)">deny</button>
+                                </div>
+                            }
+                            @if (w.BucketOf() == "Running" && w.Kind == LordHelm.Web.WidgetKind.Task)
+                            {
+                                var tierKey = GetOrInit(redirectTier, w.Id, "Deep");
+                                var vendorKey = GetOrInit(redirectVendor, w.Id, "");
+                                <div class="task-redirect" title="Redirect: apply a different tier / vendor to subsequent dispatches">
+                                    <select value="@tierKey" @onchange="e => redirectTier[w.Id] = e.Value?.ToString() ?? tierKey">
+                                        <option value="Deep">deep</option>
+                                        <option value="Fast">fast</option>
+                                        <option value="Code">code</option>
+                                    </select>
+                                    <select value="@vendorKey" @onchange="e => redirectVendor[w.Id] = e.Value?.ToString() ?? vendorKey">
+                                        <option value="">auto</option>
+                                        <option value="claude">claude</option>
+                                        <option value="gemini">gemini</option>
+                                        <option value="codex">codex</option>
+                                    </select>
+                                    <button @onclick="() => RedirectTask(w)">apply</button>
+                                </div>
+                            }
+                            <div class="widget-foot">
+                                <span class="mono">@(w.Env?.ToString() ?? w.Kind.ToString())</span>
+                                <span class="mono">@w.UpdatedAt.ToLocalTime().ToString("HH:mm:ss")</span>
                             </div>
-                        }
-                    </div>
-                    @if (w.BucketOf() == "Running" && w.Kind == LordHelm.Web.WidgetKind.Task)
-                    {
-                        var tierKey = GetOrInit(redirectTier, w.Id, "Deep");
-                        var vendorKey = GetOrInit(redirectVendor, w.Id, "");
-                        <div class="task-redirect" title="Redirect: apply a different tier / vendor to subsequent dispatches">
-                            <select value="@tierKey" @onchange="e => redirectTier[w.Id] = e.Value?.ToString() ?? tierKey">
-                                <option value="Deep">deep</option>
-                                <option value="Fast">fast</option>
-                                <option value="Code">code</option>
-                            </select>
-                            <select value="@vendorKey" @onchange="e => redirectVendor[w.Id] = e.Value?.ToString() ?? vendorKey">
-                                <option value="">auto</option>
-                                <option value="claude">claude</option>
-                                <option value="gemini">gemini</option>
-                                <option value="codex">codex</option>
-                            </select>
-                            <button @onclick="() => RedirectTask(w)">apply</button>
                         </div>
-                    }
-                    <div class="widget-foot">
-                        <span>@(w.Env?.ToString() ?? w.Kind.ToString())</span>
-                        <span>@w.UpdatedAt.ToLocalTime().ToString("HH:mm:ss")</span>
-                    </div>
-                </div>
+                    </ChildContent>
+                </WidgetFrame>
             }
         </div>
+        }
     </section>
 }
 
@@ -160,31 +166,105 @@
 
 @code {
     private IReadOnlyList<LordHelm.Web.WidgetModel> widgets = Array.Empty<LordHelm.Web.WidgetModel>();
+    private IReadOnlyList<LordHelm.Web.Layout.LayoutEntry> _layout = Array.Empty<LordHelm.Web.Layout.LayoutEntry>();
     private LordHelm.Web.WidgetModel? expanded;
     private DotNetObjectReference<Home>? _selfRef;
     private int? _sseSubscription;
     private readonly List<string> liveLines = new();
     private const int LiveLinesCap = 400;
-    private string goalText = string.Empty;
-    private bool goalInFlight;
-    private string? lastGoalStatus;
-    private string selectedTier = "Deep";
-    private string selectedVendor = string.Empty;
+    private bool editMode;
     private string? _activeFilter;
     private readonly Dictionary<string, string> redirectTier = new();
     private readonly Dictionary<string, string> redirectVendor = new();
 
-    protected override void OnParametersSet()
+    // Completed + Failed start collapsed so the grid doesn't get drowned in
+    // historical tiles. Incidents/Approvals/Running always open by default —
+    // those are the attention-warranting buckets.
+    private readonly HashSet<string> _collapsedBuckets = new(StringComparer.OrdinalIgnoreCase) { "Completed", "Failed" };
+
+    private bool IsCollapsed(string key) => _collapsedBuckets.Contains(key);
+    private void ToggleCollapsed(string key)
     {
-        // /skills?goal=... prefills the goal bar when the operator clicks a run button.
-        var uri = new Uri(Nav.Uri);
-        var query = System.Web.HttpUtility.ParseQueryString(uri.Query);
-        var fromQuery = query["goal"];
-        if (!string.IsNullOrEmpty(fromQuery) && string.IsNullOrEmpty(goalText))
-        {
-            goalText = fromQuery;
-        }
+        if (!_collapsedBuckets.Add(key)) _collapsedBuckets.Remove(key);
     }
+    private void ClearBucket(string key)
+    {
+        foreach (var w in widgets.Where(w => w.BucketOf() == key).ToList())
+            State.Remove(w.Id);
+    }
+
+    private void ToggleEditMode() => editMode = !editMode;
+    private void RestoreDefault() { Layout.RestoreDefault(); _layout = Layout.Entries; }
+
+    private void HandleDrop(string sourceId, string targetId)
+    {
+        if (sourceId == targetId) return;
+        var entries = Layout.Entries;
+        var si = entries.Select((e, i) => (e, i)).FirstOrDefault(p => p.e.Id == sourceId).i;
+        var ti = entries.Select((e, i) => (e, i)).FirstOrDefault(p => p.e.Id == targetId).i;
+        Layout.SwapByIndex(si, ti);
+        _layout = Layout.Entries;
+    }
+
+    private static string TitleFor(string id) => id switch
+    {
+        "topology"  => "Topology",
+        "fleet"     => "Fleet Roster",
+        "active"    => "Active Agent",
+        "kpis"      => "KPIs",
+        "gantt"     => "Timeline",
+        "queue"     => "Task Queue",
+        "alerts"    => "Alerts",
+        "approvals" => "Approvals",
+        "recent"    => "Recent",
+        "health"    => "System Health",
+        "providers" => "Providers",
+        "artifacts" => "Artifacts",
+        _ => id,
+    };
+
+    private static string? SubtitleFor(string id) => id switch
+    {
+        "topology"  => "live fleet graph",
+        "providers" => "rolling usage vs limit",
+        _ => null,
+    };
+
+    private static string GlyphFor(string id) => id switch
+    {
+        "topology"  => "⬡",
+        "fleet"     => "♟",
+        "active"    => "◎",
+        "kpis"      => "▲",
+        "gantt"     => "▬",
+        "queue"     => "▤",
+        "alerts"    => "⚠",
+        "approvals" => "✓",
+        "recent"    => "↺",
+        "health"    => "◉",
+        "providers" => "◎",
+        "artifacts" => "◫",
+        _ => "·",
+    };
+
+    private RenderFragment WidgetFor(string id) => builder =>
+    {
+        switch (id)
+        {
+            case "topology":  builder.OpenComponent<TopologyWidget>(0);       builder.CloseComponent(); break;
+            case "fleet":     builder.OpenComponent<FleetRosterWidget>(0);    builder.CloseComponent(); break;
+            case "active":    builder.OpenComponent<ActiveAgentWidget>(0);    builder.CloseComponent(); break;
+            case "kpis":      builder.OpenComponent<KpisWidget>(0);           builder.CloseComponent(); break;
+            case "gantt":     builder.OpenComponent<GanttWidget>(0);          builder.CloseComponent(); break;
+            case "queue":     builder.OpenComponent<QueueWidget>(0);          builder.CloseComponent(); break;
+            case "alerts":    builder.OpenComponent<AlertsWidget>(0);         builder.CloseComponent(); break;
+            case "approvals": builder.OpenComponent<ApprovalsWidget>(0);      builder.CloseComponent(); break;
+            case "recent":    builder.OpenComponent<RecentWidget>(0);         builder.CloseComponent(); break;
+            case "health":    builder.OpenComponent<HealthWidget>(0);         builder.CloseComponent(); break;
+            case "providers": builder.OpenComponent<ProvidersMiniWidget>(0);  builder.CloseComponent(); break;
+            case "artifacts": builder.OpenComponent<ArtifactsWidget>(0);      builder.CloseComponent(); break;
+        }
+    };
 
     private static string GetOrInit(Dictionary<string, string> map, string key, string defaultValue)
     {
@@ -194,9 +274,13 @@
 
     private void RedirectTask(LordHelm.Web.WidgetModel w)
     {
-        selectedTier = redirectTier.GetValueOrDefault(w.Id, "Deep");
-        selectedVendor = redirectVendor.GetValueOrDefault(w.Id, "");
-        lastGoalStatus = $"redirect applied: tier={selectedTier} vendor={(string.IsNullOrEmpty(selectedVendor) ? "auto" : selectedVendor)} will be used for the next goal.";
+        // Widget-level redirect now flows through the shared HelmPreference so
+        // the orchestration panel's selectors and future dispatches all pick up
+        // the new vendor/tier without per-component state threading.
+        var tier   = redirectTier.GetValueOrDefault(w.Id, "Deep");
+        var vendor = redirectVendor.GetValueOrDefault(w.Id, "");
+        if (!string.IsNullOrEmpty(vendor))
+            Preference.SetPrimary(vendor, model: null, tier: tier);
     }
 
     // ---- status buckets: attention-ordered ----
@@ -234,18 +318,18 @@
     }
 
     // ---- lifecycle ----
-    private string? ResolveModelPreview()
-    {
-        if (!Enum.TryParse<LordHelm.Orchestrator.ModelTier>(selectedTier, true, out var tier))
-            tier = LordHelm.Orchestrator.ModelTier.Deep;
-        var preferred = string.IsNullOrEmpty(selectedVendor) ? null : selectedVendor;
-        return ModelCatalog.Resolve(tier, preferred)?.ModelId;
-    }
-
     protected override void OnInitialized()
     {
         widgets = State.Snapshot();
+        _layout = Layout.Entries;
         State.OnChanged += HandleChanged;
+        Layout.OnChanged += HandleLayoutChanged;
+    }
+
+    private void HandleLayoutChanged()
+    {
+        _layout = Layout.Entries;
+        InvokeAsync(StateHasChanged);
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -300,43 +384,6 @@
     }
 
     private void ResetLayout() { /* grid layout no longer via gridstack; left as no-op */ }
-
-    private async Task SubmitGoal()
-    {
-        var goal = goalText.Trim();
-        if (string.IsNullOrEmpty(goal) || goalInFlight) return;
-
-        goalInFlight = true;
-        lastGoalStatus = "dispatching...";
-        StateHasChanged();
-
-        var resolved = ResolveModelPreview();
-        var vendor = string.IsNullOrEmpty(selectedVendor) ? null : selectedVendor;
-
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                var req = new LordHelm.Orchestrator.GoalRunRequest(goal, vendor, resolved);
-                var result = await GoalRunner.RunAsync(req, CancellationToken.None);
-                lastGoalStatus = result.Succeeded
-                    ? $"goal {result.GoalId} completed with {result.DagNodeCount} task(s)"
-                    : $"goal {result.GoalId} failed: {result.ErrorDetail}";
-            }
-            catch (Exception ex)
-            {
-                Logger.LogError(ex, "Goal dispatch failed");
-                lastGoalStatus = "error: " + ex.Message;
-            }
-            finally
-            {
-                goalInFlight = false;
-                await InvokeAsync(StateHasChanged);
-            }
-        });
-
-        goalText = string.Empty;
-    }
 
     private async Task Expand(LordHelm.Web.WidgetModel w)
     {
@@ -398,15 +445,40 @@
 
     private static string IconFor(LordHelm.Web.WidgetModel w) => w.Kind switch
     {
-        LordHelm.Web.WidgetKind.Approval => "[?]",
-        LordHelm.Web.WidgetKind.Task => "[task]",
+        LordHelm.Web.WidgetKind.Approval => "✓",
+        LordHelm.Web.WidgetKind.Task => "◎",
         _ => w.Status switch
         {
             "incident" => "!",
-            _ when w.Env == LordHelm.Core.ExecutionEnvironment.Docker => "[box]",
-            _ => "[host]",
+            _ when w.Env == LordHelm.Core.ExecutionEnvironment.Docker => "⬢",
+            _ => "◈",
         },
     };
+
+    private static int ColumnsFor(LordHelm.Web.WidgetModel w) => w.Kind switch
+    {
+        LordHelm.Web.WidgetKind.Approval => 4,
+        LordHelm.Web.WidgetKind.Task     => 4,
+        LordHelm.Web.WidgetKind.Incident => 6,
+        _                                => 3,
+    };
+
+    private static string HueFor(LordHelm.Web.WidgetModel w) => w.Kind switch
+    {
+        LordHelm.Web.WidgetKind.Approval when w.Status is "pending-approval" => "warn",
+        LordHelm.Web.WidgetKind.Incident => "err",
+        _ => w.Status switch
+        {
+            "completed" => "ok",
+            "failed"    => "err",
+            "incident"  => "err",
+            _           => "brand",
+        },
+    };
+
+    // HandleQuickAction was the old quick-action fallback when the Throne
+    // owned the goal bar; HelmChatPanel now handles its own dispatch and
+    // preset matching lives on the /widgets page, so this is obsolete.
 
     private static MarkupString RenderTail(IEnumerable<string> lines)
     {

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Skill xmlns="https://lordhelm.dev/schemas/skill-manifest/v1">
+  <Id>list-directory</Id>
+  <Version>0.1.0</Version>
+  <ExecutionEnvironment>Host</ExecutionEnvironment>
+  <RequiresApproval>false</RequiresApproval>
+  <RiskTier>Read</RiskTier>
+  <Timeout>PT10S</Timeout>
+  <MinTrust>Low</MinTrust>
+  <Description>List files and subdirectories at the given path. Returns one line per entry with type, size, and modified time.</Description>
+  <Tags>
+    <Tag>filesystem</Tag>
+    <Tag>list</Tag>
+    <Tag>ls</Tag>
+    <Tag>dir</Tag>
+    <Tag>folder</Tag>
+    <Tag>directory</Tag>
+  </Tags>
+  <ParameterSchema><![CDATA[{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["path"],
+    "properties": {
+      "path":      { "type": "string", "minLength": 2 },
+      "recursive": { "type": "boolean", "default": false }
+    },
+    "additionalProperties": false
+  }]]></ParameterSchema>
+</Skill>

@@ -1,0 +1,27 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Skill xmlns="https://lordhelm.dev/schemas/skill-manifest/v1">
+  <Id>d3js-visualization</Id>
+  <Version>0.1.0</Version>
+  <ExecutionEnvironment>Host</ExecutionEnvironment>
+  <RequiresApproval>false</RequiresApproval>
+  <RiskTier>Read</RiskTier>
+  <Timeout>PT2M</Timeout>
+  <MinTrust>Low</MinTrust>
+  <Description>Create interactive data visualizations using D3.js with best practices for charts and graphs</Description>
+  <Tags>
+    <Tag>d3</Tag>
+    <Tag>visualization</Tag>
+    <Tag>charts</Tag>
+    <Tag>data</Tag>
+  </Tags>
+  <ParameterSchema><![CDATA[{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["task"],
+    "properties": {
+      "task": { "type": "string", "minLength": 1 },
+      "context": { "type": "string" }
+    },
+    "additionalProperties": false
+  }]]></ParameterSchema>
+</Skill>

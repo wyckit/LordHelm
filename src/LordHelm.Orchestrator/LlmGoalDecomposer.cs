@@ -60,6 +60,8 @@ public sealed class LlmGoalDecomposer : IGoalDecomposer
         {
             var response = await _providers.GenerateWithFailoverAsync(
                 _options.PreferredVendor, null, prompt,
+                new ProviderTaskHint(TaskKind: "reasoning",
+                    EstimatedContextTokens: Math.Max(4000, prompt.Length / 4)),
                 _options.MaxTokens, _options.Temperature, ct);
 
             if (response.Error is not null || string.IsNullOrWhiteSpace(response.AssistantMessage))
@@ -116,6 +118,7 @@ public sealed class LlmGoalDecomposer : IGoalDecomposer
         sb.AppendLine("  \"skill\": string|null (one of the skill ids below, or null for synthesis),");
         sb.AppendLine("  \"preferredVendor\": \"claude\"|\"gemini\"|\"codex\"|null,");
         sb.AppendLine("  \"tier\": \"fast\"|\"deep\"|\"code\"|null,");
+        sb.AppendLine("  \"modelHint\": string|null (specific model id to downshift cheap sub-tasks, e.g. \"claude-haiku-4-5\"),");
         sb.AppendLine("  \"swarmSize\": integer 1..5|null,");
         sb.AppendLine("  \"swarmStrategy\": \"Single\"|\"Redundant\"|\"Diverse\"|null");
         sb.AppendLine("} ] }");
@@ -217,7 +220,20 @@ public sealed class LlmGoalDecomposer : IGoalDecomposer
                     _ = Enum.TryParse<SwarmStrategy>(ssEl.GetString(), ignoreCase: true, out swarmStrategy);
                 }
 
-                nodes.Add(new TaskNode(id, taskGoal, deps, persona, skill, vendor, swarmSize, swarmStrategy));
+                // Map the decomposer's "tier" hint into a router-friendly task-kind.
+                // fast/deep → reasoning; code → code; anything else → null (router
+                // falls back to generic match).
+                var tier = TryReadString(t, "tier")?.ToLowerInvariant();
+                var taskKind = tier switch
+                {
+                    "code" => "code",
+                    "deep" or "fast" => "reasoning",
+                    _ => null
+                };
+                var modelHint = TryReadString(t, "modelHint");
+
+                nodes.Add(new TaskNode(id, taskGoal, deps, persona, skill, vendor, swarmSize, swarmStrategy,
+                    TaskKind: taskKind, ModelHint: modelHint));
             }
 
             if (nodes.Count == 0)

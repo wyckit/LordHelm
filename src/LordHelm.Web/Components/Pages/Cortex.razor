@@ -1,0 +1,90 @@
+@page "/cortex"
+@rendermode InteractiveServer
+@inject LordHelm.Orchestrator.Cortex.ILordHelmCortex CortexSvc
+
+<PageTitle>Lord Helm — Cortex</PageTitle>
+
+<header class="helm-header">
+    <h1>Cortex <span class="subtitle">Lord Helm's brain — staged thoughts await promotion</span></h1>
+</header>
+
+<section class="mgmt-body">
+    <p class="muted">
+        Every retrospective and reflection lands in <code>lord_helm_cortex_staging</code>
+        first. Promotion moves it to <code>lord_helm_cortex</code> where cross-fleet recall
+        picks it up. Review, promote, or leave it — stale entries auto-drop via the engram
+        lifecycle, so nothing linger-contaminates retrieval.
+    </p>
+
+    <div class="helm-toolbar" style="margin-bottom:10px">
+        <button class="lh-ghost-btn" @onclick="Refresh" disabled="@loading">
+            @(loading ? "loading..." : "refresh")
+        </button>
+    </div>
+
+    @if (_staged.Count == 0 && !loading)
+    {
+        <div class="muted" style="font-style: italic; padding: 20px 0">
+            no staged entries — run a goal through the Throne to generate a retrospective
+        </div>
+    }
+
+    @foreach (var h in _staged)
+    {
+        var category = h.Metadata.TryGetValue("category", out var c) ? c : "entry";
+        <div class="cortex-row">
+            <div class="cortex-head">
+                <span class="cortex-cat">@category</span>
+                <span class="cortex-id mono">@h.Id</span>
+                @if (h.Metadata.TryGetValue("succeeded", out var succ))
+                {
+                    <span class="pip @(succ == "true" ? "working" : "blocked")" title="succeeded=@succ"></span>
+                }
+                @if (h.Metadata.TryGetValue("personas", out var p))
+                {
+                    <span class="muted mono">@p</span>
+                }
+            </div>
+            <pre class="mono cortex-body">@(h.Text.Length > 600 ? h.Text.Substring(0, 600) + "…" : h.Text)</pre>
+            <div class="cortex-actions">
+                <button class="approvals-approve" @onclick="() => Promote(h.Id)">promote</button>
+                <button class="approvals-deny"    @onclick="() => Reject(h.Id)">reject</button>
+            </div>
+        </div>
+    }
+
+    @if (!string.IsNullOrEmpty(toast))
+    {
+        <div class="pill ok" style="margin-top:10px">@toast</div>
+    }
+</section>
+
+@code {
+    private IReadOnlyList<LordHelm.Core.EngramHit> _staged = Array.Empty<LordHelm.Core.EngramHit>();
+    private bool loading;
+    private string? toast;
+
+    protected override Task OnInitializedAsync() => Refresh();
+
+    private async Task Refresh()
+    {
+        loading = true; StateHasChanged();
+        try { _staged = await CortexSvc.ListStagingAsync(k: 50); }
+        catch (Exception ex) { toast = $"failed: {ex.Message}"; }
+        finally { loading = false; }
+    }
+
+    private async Task Promote(string id)
+    {
+        var ok = await CortexSvc.PromoteAsync(id, reason: "operator approved");
+        toast = ok ? $"promoted {id}" : $"promote failed for {id}";
+        await Refresh();
+    }
+
+    private async Task Reject(string id)
+    {
+        var ok = await CortexSvc.RejectAsync(id);
+        toast = ok ? $"tombstoned {id}" : $"reject failed for {id}";
+        await Refresh();
+    }
+}

@@ -2,6 +2,7 @@
 @rendermode InteractiveServer
 @implements IDisposable
 @inject LordHelm.Orchestrator.IModelCatalog Catalog
+@inject LordHelm.Orchestrator.ModelDiscovery.ModelCatalogRefresher Refresher
 @inject NavigationManager Nav
 
 <PageTitle>Lord Helm — Models</PageTitle>
@@ -10,6 +11,9 @@
     <h1>Models <span class="subtitle">@models.Count available across @vendors.Count vendors</span></h1>
     <div class="helm-toolbar">
         <a href="/models/new" class="run-skill" style="text-decoration:none;padding:4px 12px">+ add model</a>
+        <button @onclick="RefreshFromCli" disabled="@refreshing" title="Ask each CLI for its current model list">
+            @(refreshing ? "probing..." : "refresh from CLI")
+        </button>
         <select @bind="compareTierStr" title="Baseline tier for cost delta">
             <option value="Deep">deep</option>
             <option value="Fast">fast</option>
@@ -31,6 +35,11 @@
         concrete model available. Catalog state persists to <code>data/models.json</code>;
         <strong>add</strong>, <strong>toggle availability</strong>, or <strong>remove</strong> inline.
     </p>
+
+    @if (!string.IsNullOrEmpty(refreshToast))
+    {
+        <div class="pill ok" style="margin-top:10px">@refreshToast</div>
+    }
 
     <h2>Available models</h2>
     <table class="mgmt-table">
@@ -100,6 +109,8 @@
     private IReadOnlyList<LordHelm.Orchestrator.McpToolEntry> mcpTools = Array.Empty<LordHelm.Orchestrator.McpToolEntry>();
     private string compareTierStr = "Deep";
     private string compareVendor = "claude";
+    private bool refreshing;
+    private string? refreshToast;
 
     protected override void OnInitialized()
     {
@@ -131,6 +142,29 @@
 
     private void RemoveMcp(LordHelm.Orchestrator.McpToolEntry t) =>
         Catalog.RemoveMcpTool(t.ServerName, t.ToolName);
+
+    private async Task RefreshFromCli()
+    {
+        if (refreshing) return;
+        refreshing = true;
+        refreshToast = null;
+        StateHasChanged();
+        try
+        {
+            var results = await Refresher.RefreshAllAsync();
+            var ok = results.Count(r => r.Succeeded);
+            var total = results.Sum(r => r.Models.Count);
+            refreshToast = $"probed {results.Count} vendors, {ok} succeeded, {total} models merged";
+        }
+        catch (Exception ex)
+        {
+            refreshToast = "probe failed: " + ex.Message;
+        }
+        finally
+        {
+            refreshing = false;
+        }
+    }
 
     private string? Baseline() => string.IsNullOrEmpty(compareVendor) ? null : compareVendor;
 

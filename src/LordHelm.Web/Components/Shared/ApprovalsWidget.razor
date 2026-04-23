@@ -1,0 +1,83 @@
+@*
+    Approvals widget — rows of pending approvals pulled from WidgetState
+    (Approval-kind widgets with a non-null PendingApproval), rendered in the
+    design-handoff row shape: agent chip + risk pill + action text + Approve
+    (brand filled) / Deny (outlined) buttons.
+*@
+@inject LordHelm.Web.WidgetState State
+@inject LordHelm.Execution.ApprovalGate ApprovalGate
+@implements IDisposable
+
+<div class="approvals-list">
+    @foreach (var w in _pending)
+    {
+        var req = w.PendingApproval!.Request;
+        var risk = RiskFor(req.RiskTier);
+        <div class="approvals-row">
+            <div class="approvals-row-head">
+                <span class="approvals-agent">@AgentFor(req.SkillId)</span>
+                <span class="approvals-risk approvals-risk-@risk">@risk</span>
+            </div>
+            <div class="approvals-action">@req.Summary</div>
+            @if (!string.IsNullOrEmpty(req.DiffPreview))
+            {
+                <pre class="mono approvals-diff">@Truncate(req.DiffPreview, 240)</pre>
+            }
+            <div class="approvals-buttons">
+                <button class="approvals-approve" @onclick="() => Approve(w)">Approve</button>
+                <button class="approvals-deny"    @onclick="() => Deny(w)">Deny</button>
+            </div>
+        </div>
+    }
+    @if (_pending.Count == 0)
+    {
+        <div class="approvals-empty">no pending approvals</div>
+    }
+</div>
+
+@code {
+    private IReadOnlyList<LordHelm.Web.WidgetModel> _pending = Array.Empty<LordHelm.Web.WidgetModel>();
+
+    protected override void OnInitialized()
+    {
+        Refresh();
+        State.OnChanged += Handle;
+    }
+
+    private void Handle()
+    {
+        Refresh();
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void Refresh() =>
+        _pending = State.Snapshot()
+            .Where(w => w.Kind == LordHelm.Web.WidgetKind.Approval && w.PendingApproval is not null)
+            .OrderByDescending(w => w.UpdatedAt)
+            .Take(6)
+            .ToList();
+
+    private void Approve(LordHelm.Web.WidgetModel w) =>
+        State.ResolveApproval(w.Id, true, "operator approved", ApprovalGate);
+
+    private void Deny(LordHelm.Web.WidgetModel w) =>
+        State.ResolveApproval(w.Id, false, "operator denied", ApprovalGate);
+
+    private static string RiskFor(LordHelm.Core.RiskTier t) => t switch
+    {
+        LordHelm.Core.RiskTier.Exec    => "high",
+        LordHelm.Core.RiskTier.Delete  => "high",
+        LordHelm.Core.RiskTier.Network => "med",
+        LordHelm.Core.RiskTier.Write   => "med",
+        _ => "low",
+    };
+
+    private static string AgentFor(string skillId) =>
+        skillId.StartsWith("expert:", StringComparison.Ordinal)
+            ? skillId["expert:".Length..]
+            : skillId;
+
+    private static string Truncate(string s, int max) => s.Length <= max ? s : s.Substring(0, max) + "…";
+
+    public void Dispose() => State.OnChanged -= Handle;
+}

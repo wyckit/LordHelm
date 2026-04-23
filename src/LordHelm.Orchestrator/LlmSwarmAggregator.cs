@@ -14,6 +14,7 @@ namespace LordHelm.Orchestrator;
 public sealed class LlmSwarmAggregator : ISwarmAggregator
 {
     private readonly IProviderOrchestrator _providers;
+    private readonly IExpertRegistry _experts;
     private readonly ConcatSwarmAggregator _fallback = new();
     private readonly ILogger<LlmSwarmAggregator> _logger;
     public string Vendor { get; }
@@ -22,12 +23,14 @@ public sealed class LlmSwarmAggregator : ISwarmAggregator
 
     public LlmSwarmAggregator(
         IProviderOrchestrator providers,
+        IExpertRegistry experts,
         ILogger<LlmSwarmAggregator> logger,
         string vendor = "claude",
         string model = "claude-opus-4-7",
         int maxTokens = 1024)
     {
         _providers = providers;
+        _experts = experts;
         _logger = logger;
         Vendor = vendor;
         Model = model;
@@ -40,13 +43,33 @@ public sealed class LlmSwarmAggregator : ISwarmAggregator
         if (outputs.Count == 1) return outputs[0].Output;
 
         var prompt = BuildPrompt(task, outputs);
+        var contextEstimate = Math.Max(4000, prompt.Length / 4);
+
+        // Same IExpert-first pattern as LlmSynthesizer: the synthesiser persona
+        // owns both "merge N swarm outputs" and "merge N dag leaves" — there is
+        // no semantic reason for two separate code paths. Expert failure falls
+        // through to the provider orchestrator, then to concat.
+        var expert = _experts.Get("synthesiser");
+        if (expert is not null)
+        {
+            var act = await expert.ActAsync(new ExpertActRequest(
+                Task: prompt,
+                EstimatedContextTokens: contextEstimate), ct);
+            if (act.Succeeded && !string.IsNullOrWhiteSpace(act.Output))
+                return act.Output.Trim();
+            _logger.LogWarning("Synthesiser expert failed ({Err}); falling back to provider orchestrator.",
+                act.Error ?? "empty");
+        }
+
         var response = await _providers.GenerateWithFailoverAsync(
             preferredVendor: Vendor,
             modelOverride: Model,
             prompt: prompt,
+            hint: new ProviderTaskHint(TaskKind: task.TaskKind ?? "summarisation",
+                EstimatedContextTokens: contextEstimate),
             maxTokens: MaxTokens,
             temperature: 0.1f,
-            ct);
+            ct: ct);
 
         if (response.Error is not null || string.IsNullOrWhiteSpace(response.AssistantMessage))
         {

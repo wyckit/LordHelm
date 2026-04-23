@@ -1,0 +1,70 @@
+@*
+    Recent widget — completed + failed tasks list (both buckets are 'recent
+    things that ended'). Pulls from WidgetState.Snapshot, filters to
+    Completed/Failed, sorts by UpdatedAt desc.
+*@
+@inject LordHelm.Web.WidgetState State
+@implements IDisposable
+
+<div class="recent-list">
+    @foreach (var w in _items)
+    {
+        var kind = KindFor(w);
+        <div class="recent-row">
+            <span class="recent-kind recent-kind-@kind">@SymbolFor(kind)</span>
+            <div class="recent-row-body">
+                <div class="recent-title mono">@w.Label</div>
+                <div class="recent-meta">@w.Status · @(w.Env?.ToString() ?? w.Kind.ToString())</div>
+            </div>
+            <span class="recent-ago mono">@Relative(w.UpdatedAt)</span>
+        </div>
+    }
+    @if (_items.Count == 0)
+    {
+        <div class="recent-empty">no recent items</div>
+    }
+</div>
+
+@code {
+    private IReadOnlyList<LordHelm.Web.WidgetModel> _items = Array.Empty<LordHelm.Web.WidgetModel>();
+
+    protected override void OnInitialized()
+    {
+        Refresh();
+        State.OnChanged += Handle;
+    }
+
+    private void Handle() { Refresh(); InvokeAsync(StateHasChanged); }
+
+    private void Refresh() =>
+        _items = State.Snapshot()
+            .Where(w => w.BucketOf() is "Completed" or "Failed")
+            .OrderByDescending(w => w.UpdatedAt)
+            .Take(8)
+            .ToList();
+
+    private static string KindFor(LordHelm.Web.WidgetModel w) => w.Status switch
+    {
+        "completed" or "approved" => "ok",
+        "failed" or "denied"      => "err",
+        _ => "info",
+    };
+
+    private static string SymbolFor(string kind) => kind switch
+    {
+        "ok"  => "✓",
+        "err" => "✗",
+        _     => "·",
+    };
+
+    private static string Relative(DateTimeOffset at)
+    {
+        var d = DateTimeOffset.UtcNow - at;
+        if (d.TotalSeconds < 60) return $"{(int)d.TotalSeconds}s";
+        if (d.TotalMinutes < 60) return $"{(int)d.TotalMinutes}m";
+        if (d.TotalHours < 24)   return $"{(int)d.TotalHours}h";
+        return $"{(int)d.TotalDays}d";
+    }
+
+    public void Dispose() => State.OnChanged -= Handle;
+}

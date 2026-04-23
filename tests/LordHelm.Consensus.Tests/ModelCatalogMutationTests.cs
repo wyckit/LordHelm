@@ -85,11 +85,44 @@ public class ModelCatalogMutationTests : IDisposable
         Assert.True(File.Exists(_path));
 
         // Load into a fresh catalog — exercises ReplaceAll.
+        // LoadAsync also merges any DefaultSeed entries missing from the
+        // persisted file, so the 2 persisted rows coexist with the seed.
         var cat2 = new ModelCatalog(seed: Array.Empty<ModelEntry>());
         await store.LoadAsync(cat2);
-        Assert.Equal(2, cat2.GetModels().Count);
+        var v1Models = cat2.GetModels("v1");
+        Assert.Equal(2, v1Models.Count);
+        Assert.Contains(cat2.GetModels(), m => m.VendorId == "claude");
         Assert.Single(cat2.GetMcpTools());
         Assert.Equal("m1", cat2.Resolve(ModelTier.Deep, "v1")?.ModelId);
+    }
+
+    [Fact]
+    public async Task JsonFileStore_Prunes_Stale_Seed_Entries_On_Load()
+    {
+        // A persisted entry for a seeded vendor (codex) that is NOT in the
+        // current DefaultSeed and has no operator tuning should be dropped on
+        // load so the dropdown tracks today's vendor lineup.
+        var older = new ModelCatalog(seed: new[]
+        {
+            new ModelEntry("codex", "o4",          ModelTier.Deep, "old flagship", true, DateTimeOffset.UtcNow),
+            new ModelEntry("codex", "gpt-5-codex", ModelTier.Code, "old code",     true, DateTimeOffset.UtcNow),
+            // operator-tuned — must survive even though it's not in today's seed
+            new ModelEntry("codex", "hand-added", ModelTier.Deep, "custom", true, DateTimeOffset.UtcNow,
+                MaxContextTokens: 200_000),
+        });
+        var store = new JsonFileModelCatalogStore(_path, NullLogger<JsonFileModelCatalogStore>.Instance);
+        await store.SaveAsync(older);
+
+        var fresh = new ModelCatalog(seed: Array.Empty<ModelEntry>());
+        await store.LoadAsync(fresh);
+
+        var codex = fresh.GetModels("codex");
+        Assert.DoesNotContain(codex, m => m.ModelId == "o4");
+        Assert.DoesNotContain(codex, m => m.ModelId == "gpt-5-codex");
+        Assert.Contains(codex, m => m.ModelId == "hand-added");
+        // New seed entries inject in
+        Assert.Contains(codex, m => m.ModelId == "gpt-5.4");
+        Assert.Contains(codex, m => m.ModelId == "gpt-5.4-mini");
     }
 
     [Fact]

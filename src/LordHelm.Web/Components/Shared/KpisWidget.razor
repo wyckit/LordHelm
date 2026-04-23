@@ -1,0 +1,82 @@
+@*
+    KPIs — 2×2 tile grid with label, big value, signed delta %, sparkline.
+    Uses IProviderHealth + WidgetState for the four metrics:
+      Tasks/hr, Success rate, Provider calls, Tokens used.
+    Spend is currently $0 because subscriptions cover the CLIs; tile still
+    renders so the placeholder animates when future HTTP-backed adapters
+    start reporting real cost.
+*@
+@inject LordHelm.Providers.IProviderHealth Health
+@inject LordHelm.Web.WidgetState Widgets
+@implements IDisposable
+
+<div class="kpi-grid">
+    @foreach (var t in _tiles)
+    {
+        var deltaClass = t.DeltaPct > 0 ? (t.Inverted ? "kpi-delta-down" : "kpi-delta-up")
+                       : t.DeltaPct < 0 ? (t.Inverted ? "kpi-delta-up"   : "kpi-delta-down")
+                       : "kpi-delta-flat";
+        <div class="kpi-tile">
+            <div class="kpi-label">@t.Label</div>
+            <div class="kpi-row">
+                <div class="kpi-val mono">@t.Value</div>
+                <Sparkline Values="t.Trend" Color="@t.Color" Width="90" Height="26" />
+            </div>
+            <div class="kpi-delta @deltaClass mono">@((t.DeltaPct > 0 ? "+" : "") + t.DeltaPct.ToString("0.0") + "%")</div>
+        </div>
+    }
+</div>
+
+@code {
+    private sealed record Tile(
+        string Label, string Value, double DeltaPct, bool Inverted,
+        IReadOnlyList<double> Trend, string Color);
+
+    private IReadOnlyList<Tile> _tiles = Array.Empty<Tile>();
+    private readonly Queue<(DateTimeOffset at, int widgets)> _historyWidgets = new();
+    private readonly Queue<(DateTimeOffset at, int calls)> _historyCalls = new();
+    private System.Timers.Timer? _timer;
+
+    protected override void OnInitialized()
+    {
+        Refresh();
+        _timer = new System.Timers.Timer(4000) { AutoReset = true };
+        _timer.Elapsed += (_, __) => { Refresh(); InvokeAsync(StateHasChanged); };
+        _timer.Start();
+    }
+
+    private void Refresh()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var widgets = Widgets.Snapshot();
+        var vendors = Health.GetAll();
+        var totalInFlight = vendors.Sum(v => v.InFlight);
+        var totalRolling  = vendors.Sum(v => (double)v.RollingCallCount);
+        var avgSuccess    = vendors.Count == 0 ? 1.0 : vendors.Average(v => v.RecentSuccessRate);
+
+        _historyWidgets.Enqueue((now, widgets.Count(w => w.BucketOf() is "Running" or "Completed")));
+        _historyCalls.Enqueue((now, (int)totalRolling));
+        while (_historyWidgets.Count > 12) _historyWidgets.Dequeue();
+        while (_historyCalls.Count > 12)   _historyCalls.Dequeue();
+
+        var hist = _historyWidgets.Select(e => (double)e.widgets).ToList();
+        var callHist = _historyCalls.Select(e => (double)e.calls).ToList();
+        var successHist = Enumerable.Range(0, 12).Select(_ => avgSuccess * 100).ToList();
+
+        double deltaPct(IReadOnlyList<double> series) =>
+            series.Count < 2 || series[0] < 1e-9 ? 0 : (series[^1] - series[0]) / Math.Max(1, series[0]) * 100;
+
+        // Subscription CLIs don't surface cost — KPI tiles stick to counts
+        // (tasks, success, calls, tokens) that the accumulator actually knows.
+        var totalTokens = vendors.Sum(v => v.SubscriptionTokens ?? 0);
+        _tiles = new[]
+        {
+            new Tile("Tasks / hr",   widgets.Count.ToString(), deltaPct(hist),        false, hist,        "var(--brand)"),
+            new Tile("Success rate", $"{(avgSuccess * 100):0.#}%", 0,                 false, successHist, "var(--ok)"),
+            new Tile("Provider calls", totalRolling.ToString("0"), deltaPct(callHist), false, callHist,   "var(--accent)"),
+            new Tile("Tokens used",  $"{totalTokens:N0}",      0,                   false, new[] { 0.0, 0.0, 0.0, 0.0 }, "var(--warn)"),
+        };
+    }
+
+    public void Dispose() { _timer?.Stop(); _timer?.Dispose(); }
+}

@@ -18,5 +18,6 @@
     <Project Path="tests/LordHelm.E2E.Tests/LordHelm.E2E.Tests.csproj" />
     <Project Path="tests/LordHelm.Execution.Tests/LordHelm.Execution.Tests.csproj" />
     <Project Path="tests/LordHelm.Skills.Tests/LordHelm.Skills.Tests.csproj" />
+    <Project Path="tests/LordHelm.Web.UnitTests/LordHelm.Web.UnitTests.csproj" />
   </Folder>
 </Solution>

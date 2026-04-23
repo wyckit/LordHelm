@@ -1,0 +1,122 @@
+@*
+    Active Agent — detail pane for the agent currently selected in the Fleet
+    Roster / Topology. Shows the type chip + name + status pip, task text,
+    progress bar, 4-metric strip (Runtime / Tokens / Load / Status in mono),
+    scrolling log stream pulled from the matching WidgetState widget's Tail.
+*@
+@inject LordHelm.Orchestrator.Topology.TopologyState Topology
+@inject LordHelm.Web.WidgetState Widgets
+@inject NavigationManager Nav
+@implements IDisposable
+
+@if (_node is null)
+{
+    <div class="active-empty">
+        Select an agent from the Fleet Roster or Topology to inspect it.
+    </div>
+}
+else
+{
+    var hue = HueFor(_node);
+    <div class="active-root" style="--hue: @hue">
+        <div class="active-head">
+            <div class="active-chip">@GlyphFor(_node.AgentType)</div>
+            <div class="active-id">
+                <div class="active-name">
+                    @_node.Label
+                    <span class="pip @(PipFor(_node.Status))"></span>
+                </div>
+                <div class="active-meta mono">
+                    @(_node.AgentType?.ToString().ToLowerInvariant() ?? "—") · load @((int)(_node.Load * 100))%
+                </div>
+            </div>
+            <button class="active-deepdive" @onclick="OpenDeepDive">Deep dive</button>
+        </div>
+
+        <div class="active-task">@(_node.Task ?? "standby")</div>
+
+        <div class="active-progress">
+            <div class="active-progress-fill" style="width:@((int)(_node.Load * 100))%"></div>
+        </div>
+
+        <div class="active-metrics">
+            <div class="active-metric"><span class="metric-label">Runtime</span><span class="mono metric-val">—</span></div>
+            <div class="active-metric"><span class="metric-label">Tokens</span><span class="mono metric-val">@_node.Tokens.ToString("N0")</span></div>
+            <div class="active-metric"><span class="metric-label">Load</span><span class="mono metric-val">@((int)(_node.Load * 100))%</span></div>
+            <div class="active-metric"><span class="metric-label">Status</span><span class="mono metric-val">@_node.Status</span></div>
+        </div>
+
+        <div class="active-log">
+            @if (_widget is { Tail.Count: > 0 })
+            {
+                <pre class="mono">@string.Join("\n", _widget.Tail.TakeLast(16))</pre>
+            }
+            else
+            {
+                <div class="active-log-empty">no log output yet — the agent is @(_node.Status.ToString().ToLowerInvariant())</div>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    private LordHelm.Orchestrator.Topology.TopologyNode? _node;
+    private LordHelm.Web.WidgetModel? _widget;
+
+    protected override void OnInitialized()
+    {
+        Refresh();
+        Topology.OnSelectionChanged += Handle;
+        Topology.OnChanged          += Handle;
+        Widgets.OnChanged            += Handle;
+    }
+
+    private void Handle() { Refresh(); InvokeAsync(StateHasChanged); }
+
+    private void Refresh()
+    {
+        var id = Topology.SelectedAgentId;
+        _node = id is null ? null : Topology.Nodes.FirstOrDefault(n => n.Id == id);
+        _widget = id is null ? null : Widgets.Snapshot().FirstOrDefault(w => w.Id == id);
+    }
+
+    private void OpenDeepDive() { if (_node is not null) Nav.NavigateTo("/agents/" + _node.Id); }
+
+    private static string PipFor(LordHelm.Orchestrator.Topology.AgentRunState s) => s switch
+    {
+        LordHelm.Orchestrator.Topology.AgentRunState.Working => "working",
+        LordHelm.Orchestrator.Topology.AgentRunState.Waiting => "waiting",
+        LordHelm.Orchestrator.Topology.AgentRunState.Blocked => "blocked",
+        LordHelm.Orchestrator.Topology.AgentRunState.Done    => "done",
+        _ => "idle",
+    };
+
+    private static string HueFor(LordHelm.Orchestrator.Topology.TopologyNode n) => n.AgentType switch
+    {
+        LordHelm.Orchestrator.Topology.AgentType.Code     => "var(--hue-code)",
+        LordHelm.Orchestrator.Topology.AgentType.Research => "var(--hue-research)",
+        LordHelm.Orchestrator.Topology.AgentType.Data     => "var(--hue-data)",
+        LordHelm.Orchestrator.Topology.AgentType.Ops      => "var(--hue-ops)",
+        LordHelm.Orchestrator.Topology.AgentType.Write    => "var(--hue-write)",
+        LordHelm.Orchestrator.Topology.AgentType.Design   => "var(--hue-design)",
+        _ => "var(--fg-3)",
+    };
+
+    private static string GlyphFor(LordHelm.Orchestrator.Topology.AgentType? t) => t switch
+    {
+        LordHelm.Orchestrator.Topology.AgentType.Code     => "‹/›",
+        LordHelm.Orchestrator.Topology.AgentType.Research => "◎",
+        LordHelm.Orchestrator.Topology.AgentType.Data     => "▦",
+        LordHelm.Orchestrator.Topology.AgentType.Ops      => "⚙",
+        LordHelm.Orchestrator.Topology.AgentType.Write    => "✎",
+        LordHelm.Orchestrator.Topology.AgentType.Design   => "◈",
+        _ => "·",
+    };
+
+    public void Dispose()
+    {
+        Topology.OnSelectionChanged -= Handle;
+        Topology.OnChanged          -= Handle;
+        Widgets.OnChanged            -= Handle;
+    }
+}

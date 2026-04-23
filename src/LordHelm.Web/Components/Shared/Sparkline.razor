@@ -1,0 +1,40 @@
+@*
+    Small inline SVG sparkline. Renders a polyline + 15% opacity area fill,
+    exactly matching the design-handoff KPI tiles.
+*@
+
+<svg class="sparkline" viewBox="0 0 @Width @Height" preserveAspectRatio="none"
+     xmlns="http://www.w3.org/2000/svg">
+    @if (_pts.Length > 1)
+    {
+        <polyline fill="none" stroke="@Color" stroke-width="1.2"
+                  points="@_line" vector-effect="non-scaling-stroke" />
+        <polygon fill="@Color" opacity="0.15" points="@_area" />
+    }
+</svg>
+
+@code {
+    [Parameter] public IReadOnlyList<double> Values { get; set; } = Array.Empty<double>();
+    [Parameter] public string Color { get; set; } = "var(--brand)";
+    [Parameter] public int Width { get; set; } = 120;
+    [Parameter] public int Height { get; set; } = 32;
+
+    private (double x, double y)[] _pts = Array.Empty<(double, double)>();
+    private string _line = "";
+    private string _area = "";
+
+    protected override void OnParametersSet()
+    {
+        if (Values.Count == 0) { _pts = Array.Empty<(double, double)>(); _line = ""; _area = ""; return; }
+        var min = Values.Min();
+        var max = Values.Max();
+        var span = max - min;
+        if (span < 1e-9) span = 1;
+        var step = Values.Count == 1 ? 0 : (double)Width / (Values.Count - 1);
+        _pts = Values.Select((v, i) => (i * step, Height - ((v - min) / span) * Height)).ToArray();
+
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        _line = string.Join(" ", _pts.Select(p => $"{p.x.ToString("0.##", inv)},{p.y.ToString("0.##", inv)}"));
+        _area = $"0,{Height} " + _line + $" {Width},{Height}";
+    }
+}

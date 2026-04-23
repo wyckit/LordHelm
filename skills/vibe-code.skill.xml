@@ -1,0 +1,27 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Skill xmlns="https://lordhelm.dev/schemas/skill-manifest/v1">
+  <Id>vibe-code</Id>
+  <Version>0.1.0</Version>
+  <ExecutionEnvironment>Host</ExecutionEnvironment>
+  <RequiresApproval>false</RequiresApproval>
+  <RiskTier>Read</RiskTier>
+  <Timeout>PT2M</Timeout>
+  <MinTrust>Low</MinTrust>
+  <Description>A slash command that helps developers rapidly prototype and build applications through natural language</Description>
+  <Tags>
+    <Tag>vibe-coding</Tag>
+    <Tag>prototyping</Tag>
+    <Tag>rapid-development</Tag>
+    <Tag>productivity</Tag>
+  </Tags>
+  <ParameterSchema><![CDATA[{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["task"],
+    "properties": {
+      "task": { "type": "string", "minLength": 1 },
+      "context": { "type": "string" }
+    },
+    "additionalProperties": false
+  }]]></ParameterSchema>
+</Skill>

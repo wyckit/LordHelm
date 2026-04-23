@@ -1,0 +1,109 @@
+@*
+    Fleet Roster — agents grouped by status with per-group pip + count.
+    Click a row to set the shared SelectedAgentId; double-click deep-dives.
+    Uses TopologyState.Nodes directly so the widget stays in sync with the
+    Topology centrepiece.
+*@
+@inject LordHelm.Orchestrator.Topology.TopologyState Topology
+@inject NavigationManager Nav
+@implements IDisposable
+
+<div class="fleet-root">
+    @foreach (var group in _groups)
+    {
+        <div class="fleet-group">
+            <div class="fleet-group-head">
+                <span class="pip @(PipFor(group.Key))"></span>
+                <span class="fleet-group-label">@group.Key</span>
+                <span class="fleet-group-count mono">@group.Value.Count</span>
+            </div>
+            <div class="fleet-rows">
+                @foreach (var n in group.Value)
+                {
+                    var selected = Topology.SelectedAgentId == n.Id;
+                    <div class="fleet-row @(selected ? "fleet-row-selected" : "")"
+                         style="--hue: @HueFor(n)"
+                         @onclick="() => Topology.Select(n.Id)"
+                         @ondblclick="() => OpenDeepDive(n.Id)">
+                        <span class="fleet-chip">@GlyphFor(n.AgentType)</span>
+                        <div class="fleet-body">
+                            <div class="fleet-name">@n.Label</div>
+                            <div class="fleet-task mono">@(n.Task ?? "—")</div>
+                        </div>
+                        <span class="fleet-load mono">@((int)(n.Load * 100))%</span>
+                    </div>
+                }
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private Dictionary<LordHelm.Orchestrator.Topology.AgentRunState, List<LordHelm.Orchestrator.Topology.TopologyNode>> _groups = new();
+
+    protected override void OnInitialized()
+    {
+        Refresh();
+        Topology.OnChanged += Handle;
+        Topology.OnSelectionChanged += Handle;
+    }
+
+    private void Handle() { Refresh(); InvokeAsync(StateHasChanged); }
+
+    private void Refresh()
+    {
+        var agents = Topology.Nodes
+            .Where(n => n.Kind == LordHelm.Orchestrator.Topology.TopologyKind.Agent)
+            .ToList();
+        var order = new[]
+        {
+            LordHelm.Orchestrator.Topology.AgentRunState.Working,
+            LordHelm.Orchestrator.Topology.AgentRunState.Waiting,
+            LordHelm.Orchestrator.Topology.AgentRunState.Blocked,
+            LordHelm.Orchestrator.Topology.AgentRunState.Idle,
+            LordHelm.Orchestrator.Topology.AgentRunState.Done,
+        };
+        _groups = order.ToDictionary(
+            s => s,
+            s => agents.Where(a => a.Status == s).OrderBy(a => a.Label).ToList());
+    }
+
+    private void OpenDeepDive(string id) => Nav.NavigateTo("/agents/" + id);
+
+    private static string PipFor(LordHelm.Orchestrator.Topology.AgentRunState s) => s switch
+    {
+        LordHelm.Orchestrator.Topology.AgentRunState.Working => "working",
+        LordHelm.Orchestrator.Topology.AgentRunState.Waiting => "waiting",
+        LordHelm.Orchestrator.Topology.AgentRunState.Blocked => "blocked",
+        LordHelm.Orchestrator.Topology.AgentRunState.Done    => "done",
+        _ => "idle",
+    };
+
+    private static string HueFor(LordHelm.Orchestrator.Topology.TopologyNode n) => n.AgentType switch
+    {
+        LordHelm.Orchestrator.Topology.AgentType.Code     => "var(--hue-code)",
+        LordHelm.Orchestrator.Topology.AgentType.Research => "var(--hue-research)",
+        LordHelm.Orchestrator.Topology.AgentType.Data     => "var(--hue-data)",
+        LordHelm.Orchestrator.Topology.AgentType.Ops      => "var(--hue-ops)",
+        LordHelm.Orchestrator.Topology.AgentType.Write    => "var(--hue-write)",
+        LordHelm.Orchestrator.Topology.AgentType.Design   => "var(--hue-design)",
+        _ => "var(--fg-3)",
+    };
+
+    private static string GlyphFor(LordHelm.Orchestrator.Topology.AgentType? t) => t switch
+    {
+        LordHelm.Orchestrator.Topology.AgentType.Code     => "‹/›",
+        LordHelm.Orchestrator.Topology.AgentType.Research => "◎",
+        LordHelm.Orchestrator.Topology.AgentType.Data     => "▦",
+        LordHelm.Orchestrator.Topology.AgentType.Ops      => "⚙",
+        LordHelm.Orchestrator.Topology.AgentType.Write    => "✎",
+        LordHelm.Orchestrator.Topology.AgentType.Design   => "◈",
+        _ => "·",
+    };
+
+    public void Dispose()
+    {
+        Topology.OnChanged -= Handle;
+        Topology.OnSelectionChanged -= Handle;
+    }
+}

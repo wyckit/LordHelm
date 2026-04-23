@@ -1,0 +1,77 @@
+@*
+    System Health widget — 2×2 grid of metered bars mapping the live
+    IProviderHealth snapshot plus one overall 'Agents' meter from
+    WidgetState. Threshold tint: ≤60% ok, ≤80% warn, >80% err.
+*@
+@inject LordHelm.Providers.IProviderHealth Health
+@inject LordHelm.Web.WidgetState Widgets
+@implements IDisposable
+
+<div class="health-grid">
+    @foreach (var t in _tiles)
+    {
+        var tone = t.Pct >= 80 ? "err" : t.Pct >= 60 ? "warn" : "ok";
+        <div class="health-tile">
+            <div class="health-head">
+                <span class="health-label">@t.Label</span>
+                <span class="mono health-val">@t.Value</span>
+            </div>
+            <div class="health-bar">
+                <div class="health-fill health-@tone" style="width:@(Math.Min(100, t.Pct))%"></div>
+            </div>
+            @if (!string.IsNullOrEmpty(t.Note))
+            {
+                <div class="mono health-note">@t.Note</div>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    private sealed record Tile(string Label, string Value, int Pct, string? Note);
+
+    private IReadOnlyList<Tile> _tiles = Array.Empty<Tile>();
+    private System.Timers.Timer? _timer;
+
+    protected override void OnInitialized()
+    {
+        Refresh();
+        Widgets.OnChanged += Handle;
+        _timer = new System.Timers.Timer(2000) { AutoReset = true };
+        _timer.Elapsed += (_, __) => Handle();
+        _timer.Start();
+    }
+
+    private void Handle()
+    {
+        Refresh();
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void Refresh()
+    {
+        var tiles = new List<Tile>();
+        foreach (var v in Health.GetAll())
+        {
+            var pct = v.WindowLimit == 0 ? 0 : (int)(v.InFlight * 100.0 / v.WindowLimit);
+            tiles.Add(new Tile(
+                Label: v.VendorId,
+                Value: $"{(int)(v.RecentSuccessRate * 100)}%",
+                Pct: pct,
+                Note: $"{v.InFlight}/{v.WindowLimit} calls · {v.Window.TotalSeconds:0}s"));
+        }
+        var snap = Widgets.Snapshot();
+        var running = snap.Count(w => w.BucketOf() == "Running");
+        var total   = Math.Max(1, snap.Count);
+        tiles.Add(new Tile("Agents", $"{running}/{snap.Count}",
+            (int)(running * 100.0 / total),
+            Note: "running / total widgets"));
+        _tiles = tiles;
+    }
+
+    public void Dispose()
+    {
+        Widgets.OnChanged -= Handle;
+        _timer?.Stop(); _timer?.Dispose();
+    }
+}

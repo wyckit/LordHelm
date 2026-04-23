@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Skill xmlns="https://lordhelm.dev/schemas/skill-manifest/v1">
+  <Id>write-file</Id>
+  <Version>0.1.0</Version>
+  <ExecutionEnvironment>Host</ExecutionEnvironment>
+  <RequiresApproval>true</RequiresApproval>
+  <RiskTier>Write</RiskTier>
+  <Timeout>PT30S</Timeout>
+  <MinTrust>Medium</MinTrust>
+  <Description>Write UTF-8 text to a file. Creates parent directories. Overwrites when overwrite=true, otherwise errors if file exists.</Description>
+  <Tags>
+    <Tag>filesystem</Tag>
+    <Tag>file</Tag>
+    <Tag>write</Tag>
+    <Tag>save</Tag>
+    <Tag>create</Tag>
+  </Tags>
+  <ParameterSchema><![CDATA[{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["path", "content"],
+    "properties": {
+      "path":      { "type": "string", "minLength": 2 },
+      "content":   { "type": "string" },
+      "overwrite": { "type": "boolean", "default": false }
+    },
+    "additionalProperties": false
+  }]]></ParameterSchema>
+</Skill>

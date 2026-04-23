@@ -1,0 +1,69 @@
+@*
+    Task Queue — surfaces WidgetState widgets that are explicitly 'waiting'
+    or 'pending-approval' in the design-handoff row shape: priority tag +
+    title + est-assignee + Assign button. Priority is derived from the
+    widget's bucket (Incident=p1, Approval=p2, Waiting/Running=p3).
+*@
+@inject LordHelm.Web.WidgetState State
+@inject NavigationManager Nav
+@implements IDisposable
+
+<div class="queue-list">
+    @foreach (var w in _rows)
+    {
+        var pri = PriorityFor(w);
+        <div class="queue-row">
+            <span class="queue-pri queue-pri-@pri mono">@pri</span>
+            <div class="queue-body">
+                <div class="queue-title">@w.Label</div>
+                <div class="queue-meta mono">→ @AssigneeFor(w) · @EstFor(w)</div>
+            </div>
+            <button class="queue-assign" @onclick="() => Inspect(w.Id)">Assign</button>
+        </div>
+    }
+    @if (_rows.Count == 0)
+    {
+        <div class="queue-empty">no tasks queued</div>
+    }
+</div>
+
+@code {
+    private IReadOnlyList<LordHelm.Web.WidgetModel> _rows = Array.Empty<LordHelm.Web.WidgetModel>();
+
+    protected override void OnInitialized()
+    {
+        Refresh();
+        State.OnChanged += Handle;
+    }
+
+    private void Handle() { Refresh(); InvokeAsync(StateHasChanged); }
+
+    private void Refresh() =>
+        _rows = State.Snapshot()
+            .Where(w => w.Status is "waiting" or "pending-approval" or "queued"
+                        || w.BucketOf() is "Approval" or "Incident")
+            .OrderByDescending(w => w.UpdatedAt)
+            .Take(6)
+            .ToList();
+
+    private void Inspect(string id) => Nav.NavigateTo("/agents/" + id);
+
+    private static string PriorityFor(LordHelm.Web.WidgetModel w) => w.BucketOf() switch
+    {
+        "Incident" => "p1",
+        "Approval" => "p2",
+        _ => "p3",
+    };
+
+    private static string AssigneeFor(LordHelm.Web.WidgetModel w) =>
+        w.Kind == LordHelm.Web.WidgetKind.Approval ? "operator" : "unassigned";
+
+    private static string EstFor(LordHelm.Web.WidgetModel w) => w.BucketOf() switch
+    {
+        "Incident" => "blocked",
+        "Approval" => "awaiting op",
+        _ => "—",
+    };
+
+    public void Dispose() => State.OnChanged -= Handle;
+}

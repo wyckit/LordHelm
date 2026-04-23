@@ -1,0 +1,85 @@
+@*
+    ArtifactsWidget — dashboard tile showing recent artifacts across every
+    expert. Compact list with kind glyph + title + producer + relative time;
+    click to expand the tile into the deep-dive view via /artifacts/:id (or
+    expand inline for text-y kinds).
+*@
+@inject LordHelm.Orchestrator.Artifacts.IArtifactStore Store
+@implements IDisposable
+
+<div class="artifacts-list">
+    @foreach (var a in _items)
+    {
+        <div class="artifacts-row artifact-@(a.Kind.ToString().ToLowerInvariant())">
+            <span class="artifacts-glyph">@GlyphFor(a.Kind)</span>
+            <div class="artifacts-body">
+                <div class="artifacts-title mono">@a.Title</div>
+                <div class="artifacts-meta">@a.ProducedBy · @a.Kind · @Relative(a.ProducedAt)</div>
+            </div>
+            @if (a.DiskPath is not null)
+            {
+                <a class="artifacts-action" href="@($"/artifacts/{a.Id}")" target="_blank" rel="noopener">open</a>
+            }
+            else if (a.Kind == LordHelm.Core.ArtifactKind.Link)
+            {
+                <a class="artifacts-action" href="@a.InlineBody" target="_blank" rel="noopener">↗</a>
+            }
+            else
+            {
+                <button class="artifacts-action" @onclick="() => _expanded = _expanded == a.Id ? null : a.Id">
+                    @(_expanded == a.Id ? "hide" : "view")
+                </button>
+            }
+        </div>
+        @if (_expanded == a.Id && a.InlineBody is not null)
+        {
+            <div class="artifacts-preview">
+                <ArtifactTile Entry="a" />
+            </div>
+        }
+    }
+    @if (_items.Count == 0)
+    {
+        <div class="artifacts-empty">no artifacts produced yet</div>
+    }
+</div>
+
+@code {
+    private IReadOnlyList<LordHelm.Core.ArtifactEntry> _items = Array.Empty<LordHelm.Core.ArtifactEntry>();
+    private string? _expanded;
+
+    protected override void OnInitialized()
+    {
+        Refresh();
+        Store.OnChanged += Handle;
+    }
+
+    private void Handle() { Refresh(); InvokeAsync(StateHasChanged); }
+
+    private void Refresh() => _items = Store.Recent(10);
+
+    private static string GlyphFor(LordHelm.Core.ArtifactKind k) => k switch
+    {
+        LordHelm.Core.ArtifactKind.Markdown => "¶",
+        LordHelm.Core.ArtifactKind.Text     => "T",
+        LordHelm.Core.ArtifactKind.Diff     => "±",
+        LordHelm.Core.ArtifactKind.Json     => "{}",
+        LordHelm.Core.ArtifactKind.Code     => "‹/›",
+        LordHelm.Core.ArtifactKind.Table    => "▦",
+        LordHelm.Core.ArtifactKind.Link     => "↗",
+        LordHelm.Core.ArtifactKind.Image    => "🖼",
+        LordHelm.Core.ArtifactKind.File     => "⎙",
+        _ => "·",
+    };
+
+    private static string Relative(DateTimeOffset at)
+    {
+        var d = DateTimeOffset.UtcNow - at;
+        if (d.TotalSeconds < 60) return $"{(int)d.TotalSeconds}s";
+        if (d.TotalMinutes < 60) return $"{(int)d.TotalMinutes}m";
+        if (d.TotalHours < 24)   return $"{(int)d.TotalHours}h";
+        return $"{(int)d.TotalDays}d";
+    }
+
+    public void Dispose() => Store.OnChanged -= Handle;
+}

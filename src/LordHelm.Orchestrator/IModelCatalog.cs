@@ -1,3 +1,5 @@
+using LordHelm.Core;
+
 namespace LordHelm.Orchestrator;
 
 public enum ModelTier { Fast, Deep, Code }
@@ -8,7 +10,12 @@ public sealed record ModelEntry(
     ModelTier Tier,
     string Description,
     bool IsAvailable,
-    DateTimeOffset LastProbed);
+    DateTimeOffset LastProbed,
+    int? MaxContextTokens = null,
+    decimal? InputPerMTokens = null,
+    decimal? OutputPerMTokens = null,
+    bool? SupportsToolCalls = null,
+    ResourceMode? Mode = null);
 
 public sealed record McpToolEntry(
     string ServerName,
@@ -51,8 +58,23 @@ public interface IModelCatalog
     void ReplaceAll(IEnumerable<ModelEntry> entries, IEnumerable<McpToolEntry> tools);
 }
 
-public sealed class ModelCatalog : IModelCatalog
+public sealed class ModelCatalog : IModelCatalog, IModelCapabilityProvider
 {
+    public ModelCapabilityOverrides? TryGet(string vendorId, string modelId)
+    {
+        if (!_models.TryGetValue((vendorId, modelId), out var entry)) return null;
+        // Collapse null fields so callers can trust "any non-null field overrides baseline".
+        if (entry.MaxContextTokens is null && entry.InputPerMTokens is null &&
+            entry.OutputPerMTokens is null && entry.SupportsToolCalls is null && entry.Mode is null)
+            return null;
+        return new ModelCapabilityOverrides(
+            MaxContextTokens: entry.MaxContextTokens,
+            InputPerMTokens: entry.InputPerMTokens,
+            OutputPerMTokens: entry.OutputPerMTokens,
+            SupportsToolCalls: entry.SupportsToolCalls,
+            Mode: entry.Mode);
+    }
+
     private readonly System.Collections.Concurrent.ConcurrentDictionary<(string vendor, string model), ModelEntry> _models;
     private readonly System.Collections.Concurrent.ConcurrentDictionary<(string server, string tool), McpToolEntry> _tools;
 
@@ -80,10 +102,17 @@ public sealed class ModelCatalog : IModelCatalog
         {
             var biased = candidates
                 .OrderBy(m => string.Equals(m.VendorId, preferredVendor, StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+                .ThenByDescending(m => m.LastProbed)
                 .ThenBy(m => m.ModelId);
             return biased.FirstOrDefault();
         }
-        return candidates.OrderBy(m => m.ModelId).FirstOrDefault();
+        // Auto-resolve (no vendor hint): prefer the most-recently-probed model
+        // so a freshly-refreshed codex/gemini catalog beats a stale claude
+        // alphabetical default. Tie-break on ModelId only as a last resort.
+        return candidates
+            .OrderByDescending(m => m.LastProbed)
+            .ThenBy(m => m.ModelId)
+            .FirstOrDefault();
     }
 
     public IReadOnlyList<McpToolEntry> GetMcpTools(string? serverName = null) =>
@@ -151,12 +180,25 @@ public sealed class ModelCatalog : IModelCatalog
             new ModelEntry("claude", "claude-opus-4-7",   ModelTier.Deep, "Anthropic Opus — deepest reasoning, highest cost",   true, now),
             new ModelEntry("claude", "claude-sonnet-4-6", ModelTier.Deep, "Anthropic Sonnet — balanced reasoning + throughput", true, now),
             new ModelEntry("claude", "claude-haiku-4-5",  ModelTier.Fast, "Anthropic Haiku — fast + cheap, 1M ctx variant",     true, now),
-            // gemini
-            new ModelEntry("gemini", "gemini-2.5-pro",    ModelTier.Deep, "Google Gemini 2.5 Pro — deep reasoning",             true, now),
-            new ModelEntry("gemini", "gemini-2.5-flash",  ModelTier.Fast, "Google Gemini 2.5 Flash — fast tier",                true, now),
-            // codex / openai-compat
-            new ModelEntry("codex",  "o4",                ModelTier.Deep, "OpenAI o4 — reasoning",                              true, now),
-            new ModelEntry("codex",  "gpt-5-codex",       ModelTier.Code, "OpenAI codex — code generation tier",                true, now),
+            // gemini — IDs mirror the gemini CLI's `/model` output.
+            new ModelEntry("gemini", "gemini-3.1-pro-preview",       ModelTier.Deep, "Gemini 3.1 Pro Preview",                true, now),
+            new ModelEntry("gemini", "gemini-3-flash-preview",       ModelTier.Fast, "Gemini 3 Flash Preview",                true, now),
+            new ModelEntry("gemini", "gemini-3.1-flash-lite-preview", ModelTier.Fast, "Gemini 3.1 Flash Lite Preview",        true, now),
+            new ModelEntry("gemini", "gemini-2.5-pro",               ModelTier.Deep, "Google Gemini 2.5 Pro — deep reasoning", true, now),
+            new ModelEntry("gemini", "gemini-2.5-flash",             ModelTier.Fast, "Google Gemini 2.5 Flash — fast tier",   true, now),
+            new ModelEntry("gemini", "gemini-2.5-flash-lite",        ModelTier.Fast, "Google Gemini 2.5 Flash Lite — cheapest", true, now),
+            // codex — IDs mirror the codex CLI's `/model` output.
+            // ChatGPT subscription grants access to gpt-5.x line only;
+            // `o4` / API-only models intentionally omitted so the probe and
+            // default dispatch don't land on a 401-gated model.
+            // Deep = flagship reasoning; Code = codex-optimized; Fast = smaller/cheaper.
+            new ModelEntry("codex",  "gpt-5.4",            ModelTier.Deep, "Latest frontier agentic coding model",                true, now),
+            new ModelEntry("codex",  "gpt-5.2",            ModelTier.Deep, "Optimized for professional work and long-running agents", true, now),
+            new ModelEntry("codex",  "gpt-5.1-codex-max",  ModelTier.Deep, "Codex-optimized flagship for deep and fast reasoning", true, now),
+            new ModelEntry("codex",  "gpt-5.2-codex",      ModelTier.Code, "Frontier agentic coding model",                       true, now),
+            new ModelEntry("codex",  "gpt-5.3-codex",      ModelTier.Code, "Frontier Codex-optimized agentic coding model",       true, now),
+            new ModelEntry("codex",  "gpt-5.4-mini",       ModelTier.Fast, "Smaller frontier agentic coding model",               true, now),
+            new ModelEntry("codex",  "gpt-5.1-codex-mini", ModelTier.Fast, "Optimized for codex. Cheaper, faster, less capable",  true, now),
         };
     }
 }

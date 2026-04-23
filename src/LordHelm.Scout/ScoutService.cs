@@ -51,47 +51,57 @@ public sealed class ScoutService : BackgroundService
 
     public async Task RunOnceAsync(CancellationToken ct)
     {
-        foreach (var t in _options.Targets)
+        // Targets probed concurrently — three CLIs no longer wait on each
+        // other's --help/--version roundtrips. Per-vendor failure stays
+        // isolated to its own try/catch so one bad CLI can't kill the sweep.
+        var tasks = _options.Targets.Select(t => ProbeTargetAsync(t, ct)).ToArray();
+        await Task.WhenAll(tasks);
+    }
+
+    private async Task ProbeTargetAsync(ScoutTarget t, CancellationToken ct)
+    {
+        if (ct.IsCancellationRequested) return;
+        try
         {
-            if (ct.IsCancellationRequested) break;
-            try
+            var (help, version) = await ProbeAsync(t.Executable, ct);
+            if (help is null || version is null)
             {
-                var (help, version) = await ProbeAsync(t.Executable, ct);
-                if (help is null || version is null)
-                {
-                    _logger.LogWarning("Scout: {Vendor} unreachable", t.VendorId);
-                    continue;
-                }
-                var spec = t.Parser.Parse(help, version, DateTimeOffset.UtcNow);
-                var mutations = await _store.RecordAsync(spec, _options.StabilityThreshold, ct);
-
-                var flagsChangedForVendor = mutations.Any(m =>
-                    m.VendorId == t.VendorId &&
-                    m.Kind is MutationKind.Added or MutationKind.Removed or MutationKind.ChangedType or MutationKind.Archived);
-                if (flagsChangedForVendor && _options.FlagHydrator is not null)
-                {
-                    _options.FlagHydrator.DropVendorVersioned(t.VendorId);
-                    _options.FlagHydrator.Hydrate(t.VendorId, spec.Version,
-                        spec.Flags.Select(f => (f.Name, f.Default)));
-                }
-
-                foreach (var m in mutations)
-                {
-                    _logger.LogInformation("Scout mutation: {Vendor} {Kind} {Flag}", m.VendorId, m.Kind, m.FlagName);
-                    _onMutation?.Invoke(m);
-                }
+                _logger.LogWarning("Scout: {Vendor} unreachable", t.VendorId);
+                return;
             }
-            catch (Exception ex)
+            var spec = t.Parser.Parse(help, version, DateTimeOffset.UtcNow);
+            var mutations = await _store.RecordAsync(spec, _options.StabilityThreshold, ct);
+
+            var flagsChangedForVendor = mutations.Any(m =>
+                m.VendorId == t.VendorId &&
+                m.Kind is MutationKind.Added or MutationKind.Removed or MutationKind.ChangedType or MutationKind.Archived);
+            if (flagsChangedForVendor && _options.FlagHydrator is not null)
             {
-                _logger.LogError(ex, "Scout failed for {Vendor}", t.VendorId);
+                _options.FlagHydrator.DropVendorVersioned(t.VendorId);
+                _options.FlagHydrator.Hydrate(t.VendorId, spec.Version,
+                    spec.Flags.Select(f => (f.Name, f.Default)));
             }
+
+            foreach (var m in mutations)
+            {
+                _logger.LogInformation("Scout mutation: {Vendor} {Kind} {Flag}", m.VendorId, m.Kind, m.FlagName);
+                _onMutation?.Invoke(m);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Scout failed for {Vendor}", t.VendorId);
         }
     }
 
     private async Task<(string? help, string? version)> ProbeAsync(string executable, CancellationToken ct)
     {
-        var help = await RunAsync(executable, "--help", ct);
-        var version = await RunAsync(executable, "--version", ct);
+        // --help and --version fire concurrently — no state depends on
+        // ordering and each subprocess is independent.
+        var helpTask = RunAsync(executable, "--help", ct);
+        var versionTask = RunAsync(executable, "--version", ct);
+        var help = await helpTask;
+        var version = await versionTask;
         return (help, version);
     }
 

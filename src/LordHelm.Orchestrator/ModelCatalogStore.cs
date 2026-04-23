@@ -36,11 +36,37 @@ public sealed class JsonFileModelCatalogStore : IModelCatalogStore
             await using var stream = File.OpenRead(_path);
             var wire = await JsonSerializer.DeserializeAsync<Wire>(stream, JsonOpts, ct);
             if (wire is null) return;
-            catalog.ReplaceAll(
-                wire.Models ?? new List<ModelEntry>(),
-                wire.McpTools ?? new List<McpToolEntry>());
-            _logger.LogInformation("Model catalog loaded from {Path}: {Models} models, {Tools} MCP tools",
-                _path, wire.Models?.Count ?? 0, wire.McpTools?.Count ?? 0);
+            var persisted = wire.Models ?? new List<ModelEntry>();
+            var seed = ModelCatalog.DefaultSeed();
+            var seedVendors = new HashSet<string>(
+                seed.Select(s => s.VendorId), StringComparer.OrdinalIgnoreCase);
+            var seedKeys = new HashSet<(string, string)>(
+                seed.Select(s => (s.VendorId.ToLowerInvariant(), s.ModelId.ToLowerInvariant())));
+
+            // Drop persisted entries for a seeded vendor that (a) aren't in the
+            // current seed AND (b) show no sign of operator tuning. Those are
+            // stale leftovers from older seed generations — the dropdown should
+            // match today's CLI, not a historical one.
+            int pruned = persisted.RemoveAll(m =>
+                seedVendors.Contains(m.VendorId) &&
+                !seedKeys.Contains((m.VendorId.ToLowerInvariant(), m.ModelId.ToLowerInvariant())) &&
+                !HasOperatorTuning(m));
+
+            // Merge-in any DefaultSeed entries the persisted file is missing so
+            // newly-shipped models surface for existing operators.
+            var have = new HashSet<(string, string)>(
+                persisted.Select(m => (m.VendorId.ToLowerInvariant(), m.ModelId.ToLowerInvariant())));
+            int injected = 0;
+            foreach (var s in seed)
+            {
+                var key = (s.VendorId.ToLowerInvariant(), s.ModelId.ToLowerInvariant());
+                if (have.Add(key)) { persisted.Add(s); injected++; }
+            }
+
+            catalog.ReplaceAll(persisted, wire.McpTools ?? new List<McpToolEntry>());
+            _logger.LogInformation(
+                "Model catalog loaded from {Path}: {Persisted} persisted, pruned {Pruned}, + {Injected} new seed, {Tools} MCP tools",
+                _path, wire.Models?.Count ?? 0, pruned, injected, wire.McpTools?.Count ?? 0);
         }
         catch (Exception ex)
         {
@@ -63,6 +89,15 @@ public sealed class JsonFileModelCatalogStore : IModelCatalogStore
         }
         File.Move(tmp, _path, overwrite: true);
     }
+
+    // Operator tuning = any of the nullable capability overrides being set.
+    // If none are set, the entry is pure seed/probe data and safe to prune.
+    private static bool HasOperatorTuning(ModelEntry m) =>
+        m.MaxContextTokens.HasValue ||
+        m.InputPerMTokens.HasValue ||
+        m.OutputPerMTokens.HasValue ||
+        m.SupportsToolCalls.HasValue ||
+        m.Mode.HasValue;
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {

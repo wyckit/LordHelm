@@ -1,0 +1,6 @@
+{
+  "primaryVendor": "claude",
+  "primaryModel": "gpt-5.4",
+  "primaryTier": "Deep",
+  "thinkingEnabled": false
+}

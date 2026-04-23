@@ -1,0 +1,181 @@
+using System.Text;
+using System.Xml.Linq;
+using LordHelm.Core;
+using Microsoft.Extensions.Logging;
+
+namespace LordHelm.Skills.Export;
+
+/// <summary>
+/// Writes LordHelm manifests into Claude Code's skills directory
+/// (<c>~/.claude/skills/{id}/SKILL.md</c>) as markdown files with YAML
+/// frontmatter. Claude Code auto-loads anything in that directory on
+/// session start, so after a sync + Claude Code restart the operator's
+/// slash-command palette carries every LordHelm skill.
+/// </summary>
+public sealed class ClaudeSkillExporter : ISkillExporter
+{
+    private readonly ILogger<ClaudeSkillExporter> _logger;
+    private readonly string? _skillsDir;
+
+    public string VendorId => "claude";
+    public string? TargetDirectory => _skillsDir;
+
+    public ClaudeSkillExporter(ILogger<ClaudeSkillExporter> logger, string? overrideDir = null)
+    {
+        _logger = logger;
+        var home = overrideDir ?? Environment.GetEnvironmentVariable("USERPROFILE")
+            ?? Environment.GetEnvironmentVariable("HOME");
+        _skillsDir = home is null ? null : Path.Combine(home, ".claude", "skills");
+    }
+
+    public bool IsSupported() => !string.IsNullOrEmpty(_skillsDir);
+
+    public async Task<ExportReport> ExportAsync(
+        IReadOnlyList<SkillManifest> manifests, bool overwrite, CancellationToken ct = default)
+    {
+        var errors = new List<string>();
+        int written = 0, skipped = 0;
+
+        if (_skillsDir is null)
+            return new ExportReport(VendorId, 0, 0, 0,
+                new[] { "HOME/USERPROFILE env not set; can't resolve Claude skills dir" },
+                null);
+
+        Directory.CreateDirectory(_skillsDir);
+
+        // Write the orchestration briefing as CLAUDE.md at the skills-dir
+        // parent (Claude Code's convention loads CLAUDE.md from ~/.claude/).
+        try
+        {
+            var briefingPath = Path.Combine(
+                Directory.GetParent(_skillsDir)!.FullName, "CLAUDE.md");
+            if (overwrite || !File.Exists(briefingPath))
+            {
+                await File.WriteAllTextAsync(briefingPath,
+                    VendorBriefing.ForVendor("claude", manifests.Count, _skillsDir),
+                    Encoding.UTF8, ct);
+            }
+        }
+        catch (Exception ex) { errors.Add($"briefing: {ex.Message}"); }
+
+        foreach (var m in manifests)
+        {
+            if (ct.IsCancellationRequested) break;
+            try
+            {
+                var skillDir = Path.Combine(_skillsDir, SafeDirName(m.Id));
+                Directory.CreateDirectory(skillDir);
+                var skillFile = Path.Combine(skillDir, "SKILL.md");
+                if (File.Exists(skillFile) && !overwrite) { skipped++; continue; }
+                await File.WriteAllTextAsync(skillFile, BuildSkillMd(m), Encoding.UTF8, ct);
+                written++;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "export failed for skill {Id}", m.Id);
+                errors.Add($"{m.Id}: {ex.Message}");
+            }
+        }
+        _logger.LogInformation(
+            "Claude skill export: {Written} written, {Skipped} skipped, {Errors} errors",
+            written, skipped, errors.Count);
+        return new ExportReport(VendorId, manifests.Count, written, skipped, errors, _skillsDir);
+    }
+
+    // Claude Code convention — YAML frontmatter with `name` and `description`
+    // followed by arbitrary markdown body. Keep the body terse and
+    // instruction-style; Claude reads the body when the skill gets selected.
+    public static string BuildSkillMd(SkillManifest m)
+    {
+        var (description, tags) = ExtractFromXml(m.CanonicalXml);
+        var sb = new StringBuilder();
+        sb.AppendLine("---");
+        sb.Append("name: ").AppendLine(m.Id);
+        sb.Append("description: ").AppendLine(YamlEscape(description));
+        sb.AppendLine("---");
+        sb.AppendLine();
+        sb.Append("# ").AppendLine(Titleize(m.Id));
+        sb.AppendLine();
+        sb.AppendLine(description);
+        sb.AppendLine();
+        if (tags.Count > 0)
+        {
+            sb.Append("**Tags:** ").AppendLine(string.Join(", ", tags));
+            sb.AppendLine();
+        }
+        sb.AppendLine("## Parameters");
+        sb.AppendLine();
+        sb.AppendLine("```json");
+        sb.AppendLine(m.ParameterSchemaJson.Trim());
+        sb.AppendLine("```");
+        sb.AppendLine();
+        sb.AppendLine("## Execution context");
+        sb.AppendLine();
+        sb.Append("- Environment: `").Append(m.ExecEnv).AppendLine("`");
+        sb.Append("- Risk tier: `").Append(m.RiskTier).AppendLine("`");
+        sb.Append("- Requires operator approval: `").Append(m.RequiresApproval).AppendLine("`");
+        sb.Append("- Timeout: `").Append(m.Timeout).AppendLine("`");
+        sb.Append("- Min trust: `").Append(m.MinTrust).AppendLine("`");
+        sb.AppendLine();
+        sb.AppendLine("_Generated by Lord Helm from manifest `" + m.Id + "` v" + m.Version + "._");
+        return sb.ToString();
+    }
+
+    public static (string Description, IReadOnlyList<string> Tags) ExtractFromXml(string canonicalXml)
+    {
+        try
+        {
+            var doc = XDocument.Parse(canonicalXml);
+            var ns = doc.Root?.GetDefaultNamespace() ?? XNamespace.None;
+            var desc = doc.Root?.Element(ns + "Description")?.Value?.Trim() ?? "";
+            var tags = doc.Root?.Element(ns + "Tags")?.Elements(ns + "Tag")
+                .Select(t => t.Value?.Trim() ?? "")
+                .Where(t => t.Length > 0)
+                .ToList() ?? new List<string>();
+            return (desc, tags);
+        }
+        catch
+        {
+            return ("", Array.Empty<string>());
+        }
+    }
+
+    private static string SafeDirName(string id) =>
+        new string(id.Select(c => char.IsLetterOrDigit(c) || c == '-' || c == '_' ? c : '-').ToArray());
+
+    private static string YamlEscape(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return "\"\"";
+        // Single-line scalar is fine when there's no `:` or leading special char
+        // and no newlines; otherwise quote + escape.
+        if (s.Contains('\n') || s.Contains(':') || s.Contains('"'))
+            return "\"" + s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n") + "\"";
+        return s;
+    }
+
+    private static string Titleize(string id)
+    {
+        var parts = id.Split('-', '_');
+        return string.Join(' ', parts.Select(p =>
+            p.Length == 0 ? p : char.ToUpperInvariant(p[0]) + p.Substring(1)));
+    }
+}
+
+/// <summary>
+/// Placeholder exporters for vendors whose CLIs don't ship a standard
+/// skills directory yet. Kept in the DI container so the /skills page can
+/// enumerate all known vendors uniformly and show "not yet supported"
+/// rows — when codex / gemini publish a spec we swap these out for real
+/// implementations without touching the UI.
+/// </summary>
+public sealed class UnsupportedSkillExporter : ISkillExporter
+{
+    public string VendorId { get; }
+    public string? TargetDirectory => null;
+    private readonly string _reason;
+    public UnsupportedSkillExporter(string vendorId, string reason) { VendorId = vendorId; _reason = reason; }
+    public bool IsSupported() => false;
+    public Task<ExportReport> ExportAsync(
+        IReadOnlyList<SkillManifest> manifests, bool overwrite, CancellationToken ct = default)
+        => Task.FromResult(new ExportReport(VendorId, 0, 0, 0, new[] { _reason }, null));
+}

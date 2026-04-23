@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Skill xmlns="https://lordhelm.dev/schemas/skill-manifest/v1">
+  <Id>create-directory</Id>
+  <Version>0.1.0</Version>
+  <ExecutionEnvironment>Host</ExecutionEnvironment>
+  <RequiresApproval>true</RequiresApproval>
+  <RiskTier>Write</RiskTier>
+  <Timeout>PT10S</Timeout>
+  <MinTrust>Medium</MinTrust>
+  <Description>Create a new directory at the given absolute path. No-op if it already exists.</Description>
+  <Tags>
+    <Tag>filesystem</Tag>
+    <Tag>folder</Tag>
+    <Tag>directory</Tag>
+    <Tag>create</Tag>
+    <Tag>mkdir</Tag>
+    <Tag>new</Tag>
+  </Tags>
+  <ParameterSchema><![CDATA[{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["path"],
+    "properties": {
+      "path": { "type": "string", "minLength": 2 }
+    },
+    "additionalProperties": false
+  }]]></ParameterSchema>
+</Skill>

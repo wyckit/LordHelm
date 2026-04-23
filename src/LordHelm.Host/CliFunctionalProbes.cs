@@ -28,7 +28,7 @@ public static class CliFunctionalProbes
     {
         new CliProbe("claude", "claude", new ClaudeCliModelClient(), "claude-opus-4-7"),
         new CliProbe("gemini", "gemini", new GeminiCliModelClient(), "gemini-2.5-pro"),
-        new CliProbe("codex",  "codex",  new CodexCliModelClient(),  "o4"),
+        new CliProbe("codex",  "codex",  new CodexCliModelClient(),  "gpt-5.4"),
     };
 
     public static async Task<CliProbeResult> RunAsync(CliProbe probe, TimeSpan timeout, CancellationToken ct = default)

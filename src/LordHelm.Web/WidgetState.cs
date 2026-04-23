@@ -5,7 +5,7 @@ using LordHelm.Monitor;
 
 namespace LordHelm.Web;
 
-public enum WidgetKind { Subprocess, Approval, Incident, Task }
+public enum WidgetKind { Subprocess, Approval, Incident, Task, ChatGoal }
 
 public sealed record WidgetModel(
     string Id,
@@ -108,17 +108,72 @@ public sealed class WidgetState
             Tail: ring.Snapshot()));
     }
 
+    /// <summary>
+    /// Mint a ChatGoal parent widget when the chat panel dispatches a goal.
+    /// Later-landing Task widgets with matching session id collapse under
+    /// this parent in the Home dashboard's attention buckets, so operators
+    /// see "this thread of work came from the chat" rather than orphan rows.
+    /// </summary>
+    public void StartChatGoal(string sessionId, string summary)
+    {
+        var id = $"chat-{sessionId}";
+        Upsert(new WidgetModel(
+            Id: id,
+            Kind: WidgetKind.ChatGoal,
+            Label: summary.Length > 60 ? summary.Substring(0, 60) + "…" : summary,
+            Env: null,
+            Status: "running",
+            UpdatedAt: DateTimeOffset.UtcNow,
+            Tail: new[] { $"[CHAT] {summary}" }));
+    }
+
+    public void CompleteChatGoal(string sessionId, bool succeeded, string? reply)
+    {
+        var id = $"chat-{sessionId}";
+        if (!_widgets.TryGetValue(id, out var w)) return;
+        var ring = _rings.GetOrAdd(id, _ => new LogRing());
+        if (!string.IsNullOrEmpty(reply)) ring.Append("[REPLY] " + Truncate(reply, 240));
+        Upsert(w with
+        {
+            Status = succeeded ? "completed" : "failed",
+            UpdatedAt = DateTimeOffset.UtcNow,
+            Tail = ring.Snapshot(),
+        });
+    }
+
     public void RegisterPendingApproval(string widgetId, ApprovalGate.PendingApproval pending)
     {
         var req = pending.Request;
+
+        // Expert approvals arrive with SkillId="expert:{id}". Turn that into a
+        // human-scannable label and surface the DiffPreview (the truncated
+        // expert output) inline so the operator can decide without drilling in.
+        var isExpert = req.SkillId.StartsWith("expert:", StringComparison.Ordinal);
+        var subject = isExpert ? req.SkillId["expert:".Length..] : req.SkillId;
+        var label = isExpert
+            ? $"expert approval: {subject}"
+            : $"approval: {subject}";
+
+        var tail = new List<string>
+        {
+            $"[APPROVAL] tier={req.RiskTier} operator={req.OperatorId}",
+            $"[APPROVAL] summary: {req.Summary}",
+        };
+        if (!string.IsNullOrWhiteSpace(req.DiffPreview))
+        {
+            tail.Add(isExpert ? "[APPROVAL] output preview:" : "[APPROVAL] diff:");
+            foreach (var line in req.DiffPreview.Split('\n', 8))
+                tail.Add("  " + line.TrimEnd());
+        }
+
         Upsert(new WidgetModel(
             Id: widgetId,
             Kind: WidgetKind.Approval,
-            Label: $"approval: {req.SkillId}",
+            Label: label,
             Env: null,
             Status: "pending-approval",
             UpdatedAt: DateTimeOffset.UtcNow,
-            Tail: new[] { $"[APPROVAL] tier={req.RiskTier} operator={req.OperatorId}", $"[APPROVAL] summary: {req.Summary}" },
+            Tail: tail,
             PendingApproval: pending));
     }
 

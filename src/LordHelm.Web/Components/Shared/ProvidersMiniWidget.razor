@@ -1,0 +1,43 @@
+@*
+    Compact provider health widget for the dashboard grid — one row per vendor
+    with in-flight / limit meter and recent success %. Same data as /providers
+    but condensed.
+*@
+@inject LordHelm.Providers.IProviderHealth Health
+@implements IDisposable
+
+<div class="providers-mini">
+    @foreach (var v in _all)
+    {
+        var pct = v.WindowLimit == 0 ? 0 : (int)(v.InFlight * 100.0 / v.WindowLimit);
+        var tone = !v.IsHealthy ? "err" : pct >= 80 ? "err" : pct >= 60 ? "warn" : "ok";
+        <div class="providers-row">
+            <div class="providers-head">
+                <span class="providers-name">@v.VendorId</span>
+                <span class="pip @(v.IsHealthy ? "working" : "blocked")"></span>
+                <span class="mono providers-usage">@v.InFlight / @v.WindowLimit</span>
+                <span class="providers-success mono">@(Math.Round(v.RecentSuccessRate * 100))%</span>
+            </div>
+            <div class="providers-bar">
+                <div class="providers-fill providers-@tone" style="width:@(Math.Min(100, pct))%"></div>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private IReadOnlyList<LordHelm.Providers.VendorHealth> _all = Array.Empty<LordHelm.Providers.VendorHealth>();
+    private System.Timers.Timer? _timer;
+
+    protected override void OnInitialized()
+    {
+        Refresh();
+        _timer = new System.Timers.Timer(2000) { AutoReset = true };
+        _timer.Elapsed += (_, __) => { Refresh(); InvokeAsync(StateHasChanged); };
+        _timer.Start();
+    }
+
+    private void Refresh() => _all = Health.GetAll();
+
+    public void Dispose() { _timer?.Stop(); _timer?.Dispose(); }
+}

@@ -11,10 +11,29 @@
     @foreach (var v in health)
     {
         var pct = v.WindowLimit == 0 ? 0 : (int)(v.InFlight * 100.0 / v.WindowLimit);
-        var tone = !v.IsHealthy ? "err" : pct >= 80 ? "warn" : pct >= 60 ? "amber" : "ok";
-        <span class="ribbon-vendor ribbon-@tone" title="@(v.LastError ?? $"{v.InFlight}/{v.WindowLimit} calls in last {v.Window.TotalSeconds:0}s")">
+        var successPct = (int)Math.Round(v.RecentSuccessRate * 100);
+        var tone = v.Exhausted ? "exhausted"
+                  : !v.IsHealthy ? "err"
+                  : v.RecentSuccessRate < 0.6 ? "warn"
+                  : pct >= 80 ? "warn"
+                  : pct >= 60 ? "amber"
+                  : "ok";
+        // Prefer REAL cumulative-since-startup numbers when the usage
+        // accumulator has seen calls; fall back to the governor counts
+        // that represent in-flight-vs-window only.
+        var subNum = v.SubscriptionRequests is { } sr
+            ? $"{sr} req · {(v.SubscriptionTokens ?? 0):N0} tok"
+            : $"{v.InFlight}/{v.WindowLimit}";
+        // Subscription CLIs don't report $ cost — drop it entirely. Ribbon
+        // shows session usage (real requests + tokens) only.
+        var tip = v.Exhausted ? "subscription quota exhausted — auto-retry in progress"
+                  : v.LastError ??
+            $"{subNum} — success {successPct}%" +
+            (v.ResolvedModel is null ? "" : $" — {v.ResolvedModel}");
+        <span class="ribbon-vendor ribbon-@tone" title="@tip">
             @v.VendorId
-            <span class="ribbon-num">@v.InFlight/@v.WindowLimit</span>
+            <span class="ribbon-num">@subNum</span>
+            <span class="ribbon-success" title="rolling success EMA">@successPct%</span>
         </span>
     }
 

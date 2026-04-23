@@ -1,0 +1,29 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Skill xmlns="https://lordhelm.dev/schemas/skill-manifest/v1">
+  <Id>gemini-live-api-dev</Id>
+  <Version>0.1.0</Version>
+  <ExecutionEnvironment>Host</ExecutionEnvironment>
+  <RequiresApproval>false</RequiresApproval>
+  <RiskTier>Read</RiskTier>
+  <Timeout>PT2M</Timeout>
+  <MinTrust>Low</MinTrust>
+  <Description>Use when building real-time, bidirectional streaming applications with the Gemini Live API. Covers WebSocket-based audio/video/text streaming, Voice Activity Detection, native audio, function calling, session management, and ephemeral tokens for client-side auth. SDKs: google-genai (Python), @google/genai (JavaScript/TypeScript).</Description>
+  <Tags>
+    <Tag>gemini</Tag>
+    <Tag>google</Tag>
+    <Tag>live</Tag>
+    <Tag>websocket</Tag>
+    <Tag>realtime</Tag>
+    <Tag>voice</Tag>
+  </Tags>
+  <ParameterSchema><![CDATA[{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "required": ["task"],
+    "properties": {
+      "task": { "type": "string", "minLength": 1 },
+      "context": { "type": "string" }
+    },
+    "additionalProperties": false
+  }]]></ParameterSchema>
+</Skill>

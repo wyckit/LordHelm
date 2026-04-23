@@ -1,63 +1,278 @@
 @page "/experts"
 @rendermode InteractiveServer
+@inject LordHelm.Orchestrator.IExpertRegistry Registry
+@inject LordHelm.Orchestrator.IModelCatalog Catalog
 @inject LordHelm.Core.IEngramClient Engram
 
 <PageTitle>Lord Helm — Experts</PageTitle>
 
 <header class="helm-header">
-    <h1>Experts <span class="subtitle">@experts.Count registered locally</span></h1>
+    <h1>Experts <span class="subtitle">@experts.Count runtime personas — pin vendor, model, and thinking mode</span></h1>
 </header>
 
 <section class="mgmt-body">
     <p class="muted">
-        These are the Lord-Helm-seeded experts available in the running engram. Dispatching a goal
-        can target a specific expert via the preferred-vendor hint on the home page.
+        Each row is a live <code>IExpert</code>: a persona bound to its own engram
+        namespace (<code>expert_{id}</code>) and a policy. Edits apply in-memory
+        and persist to <code>data/experts.json</code>.
+    </p>
+    <p class="muted" style="margin-top:4px">
+        <strong>Assembly-line routing.</strong> Goals decompose into a DAG; each
+        sub-task is handed to the matching persona; that persona's pinned
+        <em>vendor → model → thinking</em> decides which CLI runs the call. Pin
+        specific experts to specific CLIs to build a workflow (e.g. Code Auditor →
+        claude / opus + thinking, Refactor Engineer → codex / gpt-5.4, Security
+        Analyst → gemini / 2.5-pro).
     </p>
 
     <table class="mgmt-table">
         <thead>
             <tr>
-                <th>Expert</th><th>Domain</th><th>Notes</th>
+                <th>Expert</th>
+                <th>Namespace</th>
+                <th>Mode</th>
+                <th>Vendor</th>
+                <th>Model</th>
+                <th>Thinking</th>
+                <th>Approval</th>
+                <th></th>
             </tr>
         </thead>
         <tbody>
         @foreach (var e in experts)
         {
+            var edit = GetEdit(e.Id);
+            var vendorForModels = string.IsNullOrEmpty(edit.PinnedVendor) ? e.Persona.PreferredVendor : edit.PinnedVendor;
+            IReadOnlyList<LordHelm.Orchestrator.ModelEntry> models = string.IsNullOrEmpty(vendorForModels)
+                ? Array.Empty<LordHelm.Orchestrator.ModelEntry>()
+                : Catalog.GetModels(vendorForModels).Where(m => m.IsAvailable).OrderBy(m => m.ModelId).ToList();
+            var selectedModelId = string.IsNullOrEmpty(edit.PinnedModel) ? e.Persona.Model : edit.PinnedModel;
             <tr>
-                <td><strong>@e.Id</strong></td>
-                <td>@e.Domain</td>
-                <td>@e.Notes</td>
+                <td>
+                    <strong>@e.Id</strong><br />
+                    <span class="muted" style="font-size:10px">@e.DisplayName</span>
+                </td>
+                <td><code style="font-size:10px">@e.EngramNamespace</code></td>
+                <td>
+                    <select @bind="edit.PreferredMode">
+                        <option value="Interactive">interactive</option>
+                        <option value="Builder">builder</option>
+                        <option value="Batch">batch</option>
+                    </select>
+                </td>
+                <td>
+                    <select @bind="edit.PinnedVendor" style="width:105px"
+                            title="Pin the CLI. Empty = persona default (@e.Persona.PreferredVendor).">
+                        <option value="">(default: @e.Persona.PreferredVendor)</option>
+                        <option value="claude">claude</option>
+                        <option value="gemini">gemini</option>
+                        <option value="codex">codex</option>
+                    </select>
+                </td>
+                <td>
+                    @if (models.Count == 0)
+                    {
+                        <span class="muted" style="font-size:10px">(no vendor)</span>
+                    }
+                    else
+                    {
+                        <select @bind="edit.PinnedModel" style="width:180px"
+                                title="Pin a specific model. Empty = persona default (@e.Persona.Model).">
+                            <option value="">(default: @e.Persona.Model)</option>
+                            @foreach (var m in models)
+                            {
+                                <option value="@m.ModelId">@m.ModelId</option>
+                            }
+                        </select>
+                    }
+                </td>
+                <td>
+                    @if (SupportsThinking(selectedModelId))
+                    {
+                        <label class="throne-toggle" style="font-size:10px; padding:2px 6px">
+                            <input type="checkbox" @bind="edit.ThinkingEnabled" />
+                            <span>on</span>
+                        </label>
+                    }
+                    else
+                    {
+                        <span class="muted" style="font-size:10px">n/a</span>
+                    }
+                </td>
+                <td>
+                    <select @bind="edit.RequiresApproval">
+                        <option value="false">auto</option>
+                        <option value="true">require</option>
+                    </select>
+                </td>
+                <td>
+                    <button @onclick="() => Save(e.Id)">save</button>
+                    <button @onclick="() => ToggleRecall(e.Id)" title="Show last acts from @e.EngramNamespace">
+                        @(expandedExpert == e.Id ? "hide" : "recall")
+                    </button>
+                </td>
             </tr>
+            @if (expandedExpert == e.Id)
+            {
+                <tr>
+                    <td colspan="8" style="background: rgba(255,255,255,0.02); padding: 10px">
+                        <strong style="font-size:11px">Recent acts in <code>@e.EngramNamespace</code></strong>
+                        @if (recalling)
+                        {
+                            <span class="muted" style="font-size:10px; margin-left:8px">loading…</span>
+                        }
+                        else if (recallHits.Count == 0)
+                        {
+                            <div class="muted" style="font-size:10px; margin-top:4px">(no acts recorded yet)</div>
+                        }
+                        else
+                        {
+                            <table class="mgmt-table" style="margin-top:6px">
+                                <thead><tr><th>Act</th><th>Vendor</th><th>Tokens</th><th>Output</th></tr></thead>
+                                <tbody>
+                                @foreach (var hit in recallHits)
+                                {
+                                    var vendor = hit.Metadata.TryGetValue("vendor", out var v) ? v : "—";
+                                    var tokens = hit.Metadata.TryGetValue("tokens", out var t) ? t : "—";
+                                    <tr>
+                                        <td class="mono" style="font-size:10px">@hit.Id</td>
+                                        <td>@vendor</td>
+                                        <td class="mono">@tokens</td>
+                                        <td style="font-size:10px">@(hit.Text.Length > 160 ? hit.Text.Substring(0, 160) + "…" : hit.Text)</td>
+                                    </tr>
+                                }
+                                </tbody>
+                            </table>
+                        }
+                    </td>
+                </tr>
+            }
         }
         </tbody>
     </table>
+
+    @if (!string.IsNullOrEmpty(toast))
+    {
+        <div class="pill ok" style="margin-top:10px">@toast</div>
+    }
 </section>
 
 @code {
-    private sealed record ExpertEntry(string Id, string Domain, string Notes);
-
-    private List<ExpertEntry> experts = new();
-
-    protected override Task OnInitializedAsync()
+    private sealed class ExpertEdit
     {
-        // Lord-Helm-specific experts seeded during the build (stable list).
-        // A future revision will read these dynamically from the engram domain tree
-        // via IEngramClient.SearchAsync over the _system_experts namespace.
-        experts = new List<ExpertEntry>
+        public string PreferredMode { get; set; } = "Interactive";
+        public string PinnedVendor { get; set; } = string.Empty;
+        public string PinnedModel { get; set; } = string.Empty;
+        public bool ThinkingEnabled { get; set; }
+        public string RequiresApproval { get; set; } = "false";
+    }
+
+    private IReadOnlyList<LordHelm.Orchestrator.IExpert> experts = Array.Empty<LordHelm.Orchestrator.IExpert>();
+    private readonly Dictionary<string, ExpertEdit> _edits = new(StringComparer.OrdinalIgnoreCase);
+    private string? toast;
+    private string? expandedExpert;
+    private bool recalling;
+    private IReadOnlyList<LordHelm.Core.EngramHit> recallHits = Array.Empty<LordHelm.Core.EngramHit>();
+
+    protected override void OnInitialized()
+    {
+        experts = Registry.All;
+        foreach (var e in experts)
+            _edits[e.Id] = new ExpertEdit
+            {
+                PreferredMode = e.Policy.PreferredMode.ToString(),
+                PinnedVendor = e.Policy.PinnedVendor ?? string.Empty,
+                PinnedModel = e.Policy.PinnedModel ?? string.Empty,
+                ThinkingEnabled = e.Policy.ThinkingEnabled,
+                RequiresApproval = e.Policy.RequiresApproval ? "true" : "false",
+            };
+    }
+
+    private ExpertEdit GetEdit(string id) =>
+        _edits.TryGetValue(id, out var e) ? e : (_edits[id] = new ExpertEdit());
+
+    private void Save(string id)
+    {
+        var edit = GetEdit(id);
+        var mode = Enum.TryParse<LordHelm.Core.ResourceMode>(edit.PreferredMode, true, out var m)
+            ? m : LordHelm.Core.ResourceMode.Interactive;
+        var pinnedVendor = string.IsNullOrWhiteSpace(edit.PinnedVendor) ? null : edit.PinnedVendor.Trim();
+        var pinnedModel = string.IsNullOrWhiteSpace(edit.PinnedModel) ? null : edit.PinnedModel.Trim();
+        var requires = string.Equals(edit.RequiresApproval, "true", StringComparison.OrdinalIgnoreCase);
+
+        // Budget retained at framework level; no per-row UI so we pass through
+        // whatever the expert already had. The Experts page is a policy surface,
+        // not a budget surface — those knobs move to a future /budgets page
+        // when/if we need them.
+        var existing = Registry.Get(id);
+        var budget = existing?.Budget ?? new LordHelm.Orchestrator.ExpertBudget();
+
+        Registry.Upsert(id,
+            new LordHelm.Orchestrator.ExpertPolicy(
+                PreferredMode: mode,
+                RequiresApproval: requires,
+                PinnedVendor: pinnedVendor,
+                AlwaysDebate: existing?.Policy.AlwaysDebate ?? false,
+                PinnedModel: pinnedModel,
+                ThinkingEnabled: edit.ThinkingEnabled),
+            budget);
+
+        experts = Registry.All;
+        toast = $"saved {id}";
+    }
+
+    // Same heuristic the Throne uses — model supports reasoning/thinking when
+    // its id matches a known reasoning-capable family. Substring match keeps
+    // new preview variants light up automatically.
+    private static bool SupportsThinking(string? modelId)
+    {
+        if (string.IsNullOrEmpty(modelId)) return false;
+        var id = modelId.ToLowerInvariant();
+        return id.Contains("opus") || id.Contains("sonnet") ||
+               id.Contains("codex-max") || id.Contains("reasoning") ||
+               id.Contains("2.5-pro") || id.Contains("3.1-pro") ||
+               id.Contains("3-pro") || id.Contains("gpt-5.4") ||
+               id.Contains("gpt-5.2") || id.Contains("gpt-5.3");
+    }
+
+    private async Task ToggleRecall(string id)
+    {
+        if (expandedExpert == id)
         {
-            new("docker_sandbox_orchestrator",        "dotnet_platform",           "ephemeral-container hardening, cap-drop policy, digest-pinned images"),
-            new("skill_manifest_architect",           "dotnet_platform",           "XML+JSON hybrid manifest design, canonicalization, hash identity"),
-            new("cli_transpiler_engineer",            "integration_infrastructure","JIT transpile skills to vendor CLI flags, cache + invalidation"),
-            new("cli_capability_scout",               "integration_infrastructure","--help parsing, CliSpec drift detection, STM->LTM promotion"),
-            new("agent_observability_ui_engineer",    "integration_infrastructure","widget grid, pre-attentive tagging, live log-tail"),
-            new("approval_gate_ux_designer",          "security_analysis",         "5-tier risk, timeout-default-deny, SHA-chained audit"),
-            new("debate_protocol_designer",           "swarm_and_collective",      "blind vote + dissent propagation + 3-round ceiling"),
-            new("engram_dataflow_orchestrator",       "bdi_and_goals",             "blackboard bus, DAG topo-sort, idempotent handlers"),
-            new("multi_provider_cli_orchestrator",    "llm_integration",           "claude + gemini + codex concurrent orchestration"),
-            new("mcp_client_protocol_engineer",       "integration_infrastructure","ModelContextProtocol C# SDK, stdio JSON-RPC, correlation + cancellation"),
-            new("concurrent_dispatch_table_engineer", "dotnet_platform",           "ImmutableDictionary + Interlocked copy-on-write table swap"),
-            new("aspnetcore_sse_streaming_engineer",  "integration_infrastructure","SSE framing, IAsyncEnumerable backpressure, Blazor EventSource interop"),
-        };
-        return Task.CompletedTask;
+            expandedExpert = null;
+            recallHits = Array.Empty<LordHelm.Core.EngramHit>();
+            return;
+        }
+        var expert = Registry.Get(id);
+        if (expert is null) return;
+
+        expandedExpert = id;
+        recalling = true;
+        recallHits = Array.Empty<LordHelm.Core.EngramHit>();
+        StateHasChanged();
+        try
+        {
+            var hits = await Engram.SearchAsync(expert.EngramNamespace, "recent activity", k: 8);
+            recallHits = hits
+                .OrderByDescending(h => TryParseActTimestamp(h.Id))
+                .Take(8)
+                .ToList();
+        }
+        catch
+        {
+            recallHits = Array.Empty<LordHelm.Core.EngramHit>();
+        }
+        finally
+        {
+            recalling = false;
+        }
+    }
+
+    private static long TryParseActTimestamp(string id)
+    {
+        var prefix = "act-";
+        if (id.StartsWith(prefix, StringComparison.Ordinal) && long.TryParse(id[prefix.Length..], out var ts))
+            return ts;
+        return 0;
     }
 }

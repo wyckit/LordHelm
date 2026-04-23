@@ -1,26 +1,41 @@
 @inherits LayoutComponentBase
 @implements IDisposable
 @inject LordHelm.Core.IAlertTray Tray
+@inject LordHelm.Orchestrator.Usage.UsageProbeService UsageProbe
+@inject LordHelm.Orchestrator.ModelDiscovery.ModelCatalogRefresher ModelRefresh
 
-<nav class="helm-nav">
-    <a href="/" class="brand">LORD HELM</a>
-    <a href="/">dashboard</a>
-    <a href="/skills">skills</a>
-    <a href="/skills/new" title="Author a new skill through Lord Helm">skills+</a>
-    <a href="/experts">experts</a>
-    <a href="/overseers">overseers</a>
-    <a href="/providers">providers</a>
-    <a href="/models">models</a>
-    <a href="/models/new" title="Add a model to the catalog">models+</a>
-    <a href="/widgets">widgets</a>
-    <a href="/alerts" class="alerts-link">
-        alerts
-        @if (unread > 0)
-        {
-            <span class="alert-badge">@unread</span>
-        }
+<header class="lh-header">
+    <button class="lh-refresh" @onclick="RefreshAll" disabled="@refreshing"
+            title="Re-probe vendors for subscription status + refresh the model catalog (usage auto-runs every 5 min; models every 6 h)">
+        @(refreshing ? "⟳" : "↻")
+    </button>
+    <a href="/" class="lh-brand">
+        <span class="lh-crest">L</span>
+        <span class="lh-wordmark">Lord Helm</span>
     </a>
-</nav>
+    <nav class="lh-nav">
+        <a href="/">dashboard</a>
+        <a href="/skills">skills</a>
+        <a href="/experts">experts</a>
+        <a href="/overseers">overseers</a>
+        <a href="/providers">providers</a>
+        <a href="/models">models</a>
+        <a href="/models/probes" title="Edit CLI probe incantations">probes</a>
+        <a href="/routing" title="Adapter score breakdown for a request">routing</a>
+        <a href="/diagnostics" title="Live ping every CLI + routing scorecard">diag</a>
+        <a href="/widgets">widgets</a>
+        <a href="/cortex" title="Lord Helm's staged thoughts — approve or let them settle">cortex</a>
+    </nav>
+    <div class="lh-header-right">
+        <a href="/alerts" class="lh-alerts-link">
+            alerts
+            @if (unread > 0)
+            {
+                <span class="alert-badge">@unread</span>
+            }
+        </a>
+    </div>
+</header>
 
 <SummaryRibbon />
 
@@ -34,6 +49,7 @@
 
 @code {
     private int unread;
+    private bool refreshing;
 
     protected override void OnInitialized()
     {
@@ -45,6 +61,23 @@
     {
         unread = Tray.UnreadCount;
         InvokeAsync(StateHasChanged);
+    }
+
+    // One click re-probes both subscription status AND the model catalog so
+    // stale vendor model lists (e.g. codex) pick up the latest entries on demand.
+    private async Task RefreshAll()
+    {
+        if (refreshing) return;
+        refreshing = true;
+        StateHasChanged();
+        try
+        {
+            await Task.WhenAll(
+                UsageProbe.RefreshAllAsync(),
+                ModelRefresh.RefreshAllAsync());
+        }
+        catch { /* errors surface via UsageState.OnChanged / catalog OnChanged */ }
+        finally { refreshing = false; StateHasChanged(); }
     }
 
     public void Dispose() => Tray.OnChanged -= HandleChanged;

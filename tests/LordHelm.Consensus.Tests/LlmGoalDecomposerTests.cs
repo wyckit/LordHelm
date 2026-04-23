@@ -17,6 +17,25 @@ public class LlmGoalDecomposerTests
             Task.FromResult(new ProviderResponse(_response, Array.Empty<ToolCall>(), new UsageRecord(1, 1, 0), _error));
         public Task<ProviderResponse> GenerateWithFailoverAsync(string _, string? __, string ___, int ____ = 512, float _____ = 0.1f, CancellationToken ct = default) =>
             GenerateAsync(_, __, ___, ____, _____, ct);
+        public Task<ProviderResponse> GenerateWithFailoverAsync(string _, string? __, string ___, ProviderTaskHint hint, int ____ = 512, float _____ = 0.1f, CancellationToken ct = default) =>
+            GenerateAsync(_, __, ___, ____, _____, ct);
+    }
+
+    [Theory]
+    [InlineData("code", "code")]
+    [InlineData("deep", "reasoning")]
+    [InlineData("fast", "reasoning")]
+    [InlineData("bogus", null)]
+    public async Task Decomposer_Maps_Tier_To_TaskKind(string tier, string? expected)
+    {
+        var response = $$"""
+            {"tasks":[{"id":"t","goal":"g","dependsOn":[],"tier":"{{tier}}"}]}
+            """;
+        var d = new LlmGoalDecomposer(new StubProviders(response),
+            new LlmDecomposerOptions(), NullLogger<LlmGoalDecomposer>.Instance);
+        var tasks = await d.DecomposeAsync("x", Array.Empty<SkillManifest>());
+        Assert.Single(tasks);
+        Assert.Equal(expected, tasks[0].TaskKind);
     }
 
     [Fact]

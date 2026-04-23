@@ -1,0 +1,64 @@
+{
+  "entries": [
+    {
+      "id": "topology",
+      "columns": 9,
+      "rows": 4
+    },
+    {
+      "id": "fleet",
+      "columns": 3,
+      "rows": 3
+    },
+    {
+      "id": "health",
+      "columns": 3,
+      "rows": 2
+    },
+    {
+      "id": "approvals",
+      "columns": 4,
+      "rows": 2
+    },
+    {
+      "id": "recent",
+      "columns": 4,
+      "rows": 2
+    },
+    {
+      "id": "providers",
+      "columns": 4,
+      "rows": 2
+    },
+    {
+      "id": "alerts",
+      "columns": 3,
+      "rows": 2
+    },
+    {
+      "id": "active",
+      "columns": 6,
+      "rows": 3
+    },
+    {
+      "id": "kpis",
+      "columns": 3,
+      "rows": 2
+    },
+    {
+      "id": "gantt",
+      "columns": 6,
+      "rows": 2
+    },
+    {
+      "id": "queue",
+      "columns": 3,
+      "rows": 2
+    },
+    {
+      "id": "artifacts",
+      "columns": 6,
+      "rows": 3
+    }
+  ]
+}

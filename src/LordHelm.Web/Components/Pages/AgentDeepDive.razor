@@ -1,0 +1,197 @@
+@page "/agents/{Id}"
+@rendermode InteractiveServer
+@inject LordHelm.Web.WidgetState State
+@inject LordHelm.Orchestrator.Topology.TopologyState Topology
+@inject LordHelm.Core.IEngramClient Engram
+@inject LordHelm.Orchestrator.Artifacts.IArtifactStore Artifacts
+@inject NavigationManager Nav
+@implements IDisposable
+
+<PageTitle>Lord Helm — @(_topo?.Label ?? _widget?.Label ?? Id)</PageTitle>
+
+<div class="agent-backdrop" @onclick="Close">
+    <div class="agent-panel" @onclick:stopPropagation>
+        <header class="agent-head" style="--agent-hue: @HueFor()">
+            <div class="agent-glyph">@GlyphFor()</div>
+            <div class="agent-id">
+                <div class="agent-name">@(_topo?.Label ?? _widget?.Label ?? Id)</div>
+                <div class="agent-task mono">@(_topo?.Task ?? _widget?.Status ?? "")</div>
+                <div class="agent-meta mono">
+                    @if (_topo is not null) { <span>@(_topo.AgentType?.ToString().ToLowerInvariant()) · @_topo.Status.ToString().ToLowerInvariant() · load @((int)(_topo.Load * 100))%</span> }
+                    else if (_widget is not null) { <span>@(_widget.Env?.ToString()) · @_widget.Kind · updated @(_widget.UpdatedAt.ToLocalTime().ToString("HH:mm:ss"))</span> }
+                </div>
+            </div>
+            <div class="agent-actions">
+                <button class="agent-btn" disabled>Pause</button>
+                <button class="agent-btn" disabled>Stop</button>
+                <button class="agent-close" @onclick="Close">×</button>
+            </div>
+        </header>
+
+        <div class="agent-tabs">
+            @foreach (var t in _tabs)
+            {
+                <button class="agent-tab @(t == _activeTab ? "active" : "")" @onclick="() => _activeTab = t">@t</button>
+            }
+        </div>
+
+        <div class="agent-body">
+            @if (_activeTab == "Timeline")
+            {
+                <div class="agent-timeline">
+                    <div class="agent-timeline-logs">
+                        @if (_widget is { Tail.Count: > 0 })
+                        {
+                            <pre class="mono">@string.Join("\n", _widget.Tail)</pre>
+                        }
+                        else
+                        {
+                            <div class="agent-empty">no log output yet</div>
+                        }
+                    </div>
+                    <div class="agent-timeline-plan">
+                        <div class="agent-subhead">Step plan</div>
+                        <div class="agent-empty">(step plan will surface once IExpert.ActAsync streams intermediate thoughts)</div>
+                    </div>
+                </div>
+            }
+            else if (_activeTab == "Results")
+            {
+                var artifacts = Artifacts.Recent(40)
+                    .Where(a => a.ProducedBy.Equals(Id, StringComparison.OrdinalIgnoreCase) ||
+                                a.ProducedBy.Equals("expert_" + Id.Replace('-','_'), StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+                @if (artifacts.Count == 0)
+                {
+                    <div class="agent-empty">no artifacts produced by @Id yet</div>
+                }
+                else
+                {
+                    <div class="agent-artifacts">
+                        @foreach (var a in artifacts)
+                        {
+                            <ArtifactTile Entry="a" />
+                        }
+                    </div>
+                }
+            }
+            else if (_activeTab == "Metrics")
+            {
+                <div class="agent-metrics">
+                    <div class="metric-tile">
+                        <div class="metric-label">Tokens used this goal</div>
+                        <div class="metric-val mono">@(_topo?.Tokens.ToString("N0") ?? "—")</div>
+                    </div>
+                    <div class="metric-tile">
+                        <div class="metric-label">Load</div>
+                        <div class="metric-val mono">@((int)((_topo?.Load ?? 0) * 100))%</div>
+                    </div>
+                    <div class="metric-tile">
+                        <div class="metric-label">Status</div>
+                        <div class="metric-val mono">@(_topo?.Status.ToString() ?? _widget?.Status ?? "idle")</div>
+                    </div>
+                    <div class="metric-tile">
+                        <div class="metric-label">Kind</div>
+                        <div class="metric-val mono">@(_topo?.Kind.ToString() ?? _widget?.Kind.ToString() ?? "—")</div>
+                    </div>
+                </div>
+            }
+            else if (_activeTab == "Recall")
+            {
+                @if (_recall.Count == 0)
+                {
+                    <div class="agent-empty">@(_recallLoaded ? "no recent acts in engram" : "loading…")</div>
+                }
+                else
+                {
+                    <table class="mgmt-table">
+                        <thead><tr><th>Act</th><th>Vendor</th><th>Tokens</th><th>Output</th></tr></thead>
+                        <tbody>
+                        @foreach (var h in _recall)
+                        {
+                            <tr>
+                                <td class="mono" style="font-size:10px">@h.Id</td>
+                                <td>@(h.Metadata.TryGetValue("vendor", out var v) ? v : "—")</td>
+                                <td class="mono">@(h.Metadata.TryGetValue("tokens", out var t) ? t : "—")</td>
+                                <td style="font-size:10px">@(h.Text.Length > 200 ? h.Text.Substring(0, 200) + "…" : h.Text)</td>
+                            </tr>
+                        }
+                        </tbody>
+                    </table>
+                }
+            }
+            else if (_activeTab == "Context")
+            {
+                <pre class="mono agent-context">Persona: @(_widget?.Label ?? _topo?.Label)
+Task: @(_topo?.Task ?? _widget?.Label ?? "—")
+Status: @(_topo?.Status.ToString() ?? _widget?.Status ?? "—")
+
+(Full system prompt + context-window usage will surface here in a later slice.)</pre>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter] public string Id { get; set; } = "";
+
+    private LordHelm.Web.WidgetModel? _widget;
+    private LordHelm.Orchestrator.Topology.TopologyNode? _topo;
+    private string _activeTab = "Timeline";
+    private readonly string[] _tabs = { "Timeline", "Results", "Metrics", "Recall", "Context" };
+    private IReadOnlyList<LordHelm.Core.EngramHit> _recall = Array.Empty<LordHelm.Core.EngramHit>();
+    private bool _recallLoaded;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _widget = State.Snapshot().FirstOrDefault(w => w.Id == Id);
+        _topo   = Topology.Nodes.FirstOrDefault(n => string.Equals(n.Id, Id, StringComparison.OrdinalIgnoreCase));
+        State.OnChanged += Handle;
+        Topology.OnChanged += Handle;
+        _recallLoaded = false;
+        try
+        {
+            var ns = $"expert_{Id.Replace('-', '_')}";
+            _recall = await Engram.SearchAsync(ns, "recent activity", k: 8);
+        }
+        catch { _recall = Array.Empty<LordHelm.Core.EngramHit>(); }
+        finally { _recallLoaded = true; }
+    }
+
+    private void Handle()
+    {
+        _widget = State.Snapshot().FirstOrDefault(w => w.Id == Id);
+        _topo   = Topology.Nodes.FirstOrDefault(n => string.Equals(n.Id, Id, StringComparison.OrdinalIgnoreCase));
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void Close() => Nav.NavigateTo("/");
+
+    private string HueFor() => _topo?.AgentType switch
+    {
+        LordHelm.Orchestrator.Topology.AgentType.Code     => "var(--hue-code)",
+        LordHelm.Orchestrator.Topology.AgentType.Research => "var(--hue-research)",
+        LordHelm.Orchestrator.Topology.AgentType.Data     => "var(--hue-data)",
+        LordHelm.Orchestrator.Topology.AgentType.Ops      => "var(--hue-ops)",
+        LordHelm.Orchestrator.Topology.AgentType.Write    => "var(--hue-write)",
+        LordHelm.Orchestrator.Topology.AgentType.Design   => "var(--hue-design)",
+        _ => "var(--brand)",
+    };
+
+    private string GlyphFor() => _topo?.AgentType switch
+    {
+        LordHelm.Orchestrator.Topology.AgentType.Code     => "‹/›",
+        LordHelm.Orchestrator.Topology.AgentType.Research => "◎",
+        LordHelm.Orchestrator.Topology.AgentType.Data     => "▦",
+        LordHelm.Orchestrator.Topology.AgentType.Ops      => "⚙",
+        LordHelm.Orchestrator.Topology.AgentType.Write    => "✎",
+        LordHelm.Orchestrator.Topology.AgentType.Design   => "◈",
+        _ => "◉",
+    };
+
+    public void Dispose()
+    {
+        State.OnChanged -= Handle;
+        Topology.OnChanged -= Handle;
+    }
+}
